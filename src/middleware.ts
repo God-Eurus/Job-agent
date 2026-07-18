@@ -5,6 +5,10 @@ export function middleware(req: NextRequest) {
   const password = process.env.DASHBOARD_PASSWORD;
   if (!password) return NextResponse.next();
 
+  // Local access needs no password. Public requests arrive via the Cloudflare
+  // tunnel, which always injects cf-connecting-ip; direct localhost requests never have it.
+  if (!req.headers.get("cf-connecting-ip")) return NextResponse.next();
+
   // Gmail OAuth callback must stay reachable by Google's redirect
   if (req.nextUrl.pathname === "/api/gmail/callback") return NextResponse.next();
 
