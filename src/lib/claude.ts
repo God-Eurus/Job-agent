@@ -40,13 +40,14 @@ export async function parseResume(pdfBase64: string): Promise<Resume> {
     ],
   });
   if (!res.parsed_output) throw new Error("Resume parse failed");
-  return res.parsed_output;
+  return res.parsed_output as Resume;
 }
 
 const ScoreSchema = z.object({
   score: z.number().describe("0-100 fit score"),
   reason: z.string().describe("One sentence: why this score"),
 });
+type Score = z.infer<typeof ScoreSchema>;
 
 export async function scoreJob(
   resume: Resume,
@@ -70,7 +71,7 @@ ${(job.description ?? "").slice(0, 4000)}`,
     ],
   });
   if (!res.parsed_output) throw new Error("Score failed");
-  return res.parsed_output;
+  return res.parsed_output as Score;
 }
 
 export async function draftCoverLetter(
@@ -97,6 +98,7 @@ const EmailSchema = z.object({
   subject: z.string().describe("Under 60 chars, specific, no clickbait"),
   body: z.string().describe("Plain-text email body"),
 });
+type EmailDraft = z.infer<typeof EmailSchema>;
 
 export async function draftOutreachEmail(
   resume: Resume,
@@ -117,7 +119,7 @@ export async function draftOutreachEmail(
     ],
   });
   if (!res.parsed_output) throw new Error("Email draft failed");
-  return res.parsed_output;
+  return res.parsed_output as EmailDraft;
 }
 
 export async function draftBizdevPitch(
@@ -138,5 +140,5 @@ export async function draftBizdevPitch(
     ],
   });
   if (!res.parsed_output) throw new Error("Pitch draft failed");
-  return res.parsed_output;
+  return res.parsed_output as EmailDraft;
 }

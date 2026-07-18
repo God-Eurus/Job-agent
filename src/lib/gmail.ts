@@ -1,7 +1,8 @@
 import { google } from "googleapis";
 import { getSetting, setSetting, sentToday } from "./db";
 
-const REDIRECT = "http://localhost:3040/api/gmail/callback";
+const APP_URL = process.env.APP_URL ?? "http://localhost:3040";
+const REDIRECT = `${APP_URL}/api/gmail/callback`;
 
 export function oauthClient() {
   return new google.auth.OAuth2(
