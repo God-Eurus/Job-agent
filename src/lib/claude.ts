@@ -1,0 +1,142 @@
+import Anthropic from "@anthropic-ai/sdk";
+import { z } from "zod";
+import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
+
+const client = new Anthropic();
+const MODEL = "claude-opus-4-8";
+
+export const ResumeSchema = z.object({
+  name: z.string(),
+  email: z.string(),
+  phone: z.string(),
+  headline: z.string(),
+  years_experience: z.number(),
+  skills: z.array(z.string()),
+  roles: z.array(z.string()).describe("Job titles this person should target"),
+  summary: z.string().describe("3-sentence professional summary"),
+  links: z.array(z.string()).describe("Portfolio/GitHub/LinkedIn URLs found"),
+});
+export type Resume = z.infer<typeof ResumeSchema>;
+
+export async function parseResume(pdfBase64: string): Promise<Resume> {
+  const res = await client.messages.parse({
+    model: MODEL,
+    max_tokens: 4096,
+    output_config: { format: zodOutputFormat(ResumeSchema) },
+    messages: [
+      {
+        role: "user",
+        content: [
+          {
+            type: "document",
+            source: { type: "base64", media_type: "application/pdf", data: pdfBase64 },
+          },
+          {
+            type: "text",
+            text: "Extract this resume into the structured format. Infer target roles from experience.",
+          },
+        ],
+      },
+    ],
+  });
+  if (!res.parsed_output) throw new Error("Resume parse failed");
+  return res.parsed_output;
+}
+
+const ScoreSchema = z.object({
+  score: z.number().describe("0-100 fit score"),
+  reason: z.string().describe("One sentence: why this score"),
+});
+
+export async function scoreJob(
+  resume: Resume,
+  prefs: { roles: string[]; minSalary?: number; locations: string[]; remoteOnly: boolean },
+  job: { title: string; company: string; location: string | null; salary: string | null; description: string | null }
+) {
+  const res = await client.messages.parse({
+    model: MODEL,
+    max_tokens: 1024,
+    output_config: { format: zodOutputFormat(ScoreSchema) },
+    messages: [
+      {
+        role: "user",
+        content: `Score this job 0-100 for fit against the candidate. Score below 40 if role mismatch, below 30 if location/remote requirements conflict, below 30 if stated salary is clearly under the minimum.
+
+CANDIDATE: ${resume.headline}, ${resume.years_experience}y exp. Skills: ${resume.skills.join(", ")}. Target roles: ${prefs.roles.join(", ")}. Min salary: ${prefs.minSalary ?? "unspecified"}. Locations OK: ${prefs.locations.join(", ")}${prefs.remoteOnly ? " (REMOTE ONLY)" : ""}.
+
+JOB: ${job.title} @ ${job.company}. Location: ${job.location ?? "?"}. Salary: ${job.salary ?? "?"}.
+${(job.description ?? "").slice(0, 4000)}`,
+      },
+    ],
+  });
+  if (!res.parsed_output) throw new Error("Score failed");
+  return res.parsed_output;
+}
+
+export async function draftCoverLetter(
+  resume: Resume,
+  job: { title: string; company: string; description: string | null }
+): Promise<string> {
+  const res = await client.messages.create({
+    model: MODEL,
+    max_tokens: 2048,
+    system:
+      "You write short, specific cover letters. 150-200 words. No fluff, no 'I am writing to express'. Open with a concrete hook tying the candidate's strongest relevant work to the company's need. Plain text only.",
+    messages: [
+      {
+        role: "user",
+        content: `Candidate: ${resume.summary}\nSkills: ${resume.skills.join(", ")}\nLinks: ${resume.links.join(", ")}\n\nJob: ${job.title} at ${job.company}\n${(job.description ?? "").slice(0, 4000)}`,
+      },
+    ],
+  });
+  const block = res.content.find((b) => b.type === "text");
+  return block?.type === "text" ? block.text : "";
+}
+
+const EmailSchema = z.object({
+  subject: z.string().describe("Under 60 chars, specific, no clickbait"),
+  body: z.string().describe("Plain-text email body"),
+});
+
+export async function draftOutreachEmail(
+  resume: Resume,
+  job: { title: string; company: string },
+  contact: { name: string | null; title: string | null }
+) {
+  const res = await client.messages.parse({
+    model: MODEL,
+    max_tokens: 1024,
+    output_config: { format: zodOutputFormat(EmailSchema) },
+    system:
+      "You write cold emails to hiring managers. Under 120 words. Personalized, direct, zero flattery-filler. Structure: 1) why I'm emailing you specifically, 2) one concrete proof of relevant ability, 3) soft ask (15-min chat or 'happy to share more'). Sign with the candidate's name. Never fabricate facts about the recipient or company.",
+    messages: [
+      {
+        role: "user",
+        content: `Candidate: ${resume.name}, ${resume.headline}. ${resume.summary} Links: ${resume.links.join(", ")}\n\nRecipient: ${contact.name ?? "Hiring manager"}${contact.title ? `, ${contact.title}` : ""} at ${job.company}.\nContext: they have an open ${job.title} role I'm applying to.`,
+      },
+    ],
+  });
+  if (!res.parsed_output) throw new Error("Email draft failed");
+  return res.parsed_output;
+}
+
+export async function draftBizdevPitch(
+  resume: Resume,
+  lead: { name: string; category: string | null; region: string | null; website: string | null }
+) {
+  const res = await client.messages.parse({
+    model: MODEL,
+    max_tokens: 1024,
+    output_config: { format: zodOutputFormat(EmailSchema) },
+    system:
+      "You write cold emails selling freelance web development (websites, e-commerce stores) to small businesses. Under 110 words. Plain language a non-technical owner understands. Structure: 1) one specific observation about their business/web presence, 2) what I build and one outcome it drives (more calls, online orders), 3) low-friction ask (free 10-min look, no obligation). No jargon, no hard sell, no fake urgency. Sign with the sender's name. Include one line at the end: 'If this isn't relevant, reply STOP and I won't email again.'",
+    messages: [
+      {
+        role: "user",
+        content: `Sender: ${resume.name}, freelance website & e-commerce store builder. ${resume.summary} Portfolio: ${resume.links.join(", ")}\n\nBusiness: ${lead.name} (${lead.category ?? "local business"}) in ${lead.region ?? "their area"}. Website: ${lead.website ?? "NONE — they have no website"}.`,
+      },
+    ],
+  });
+  if (!res.parsed_output) throw new Error("Pitch draft failed");
+  return res.parsed_output;
+}

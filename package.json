@@ -1,0 +1,29 @@
+{
+  "name": "job-agent",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev -p 3040",
+    "build": "next build",
+    "start": "next start -p 3040"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.112.3",
+    "better-sqlite3": "^12.11.1",
+    "googleapis": "^173.0.0",
+    "next": "^15.3.0",
+    "playwright": "^1.52.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.1.0",
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "tailwindcss": "^4.1.0",
+    "typescript": "^5.8.0"
+  }
+}
