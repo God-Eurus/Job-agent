@@ -3,7 +3,10 @@ import { z } from "zod";
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod";
 
 const client = new Anthropic();
-const MODEL = "claude-opus-4-8";
+// Scoring runs on every hunt (25 jobs/run) — cheap model by default.
+// Drafting is low-volume outbound text — capable model by default.
+const SCORE_MODEL = process.env.SCORE_MODEL ?? "claude-haiku-4-5";
+const DRAFT_MODEL = process.env.DRAFT_MODEL ?? "claude-opus-4-8";
 
 export const ResumeSchema = z.object({
   name: z.string(),
@@ -20,7 +23,7 @@ export type Resume = z.infer<typeof ResumeSchema>;
 
 export async function parseResume(pdfBase64: string): Promise<Resume> {
   const res = await client.messages.parse({
-    model: MODEL,
+    model: DRAFT_MODEL,
     max_tokens: 4096,
     output_config: { format: zodOutputFormat(ResumeSchema) },
     messages: [
@@ -55,7 +58,7 @@ export async function scoreJob(
   job: { title: string; company: string; location: string | null; salary: string | null; description: string | null }
 ) {
   const res = await client.messages.parse({
-    model: MODEL,
+    model: SCORE_MODEL,
     max_tokens: 1024,
     output_config: { format: zodOutputFormat(ScoreSchema) },
     messages: [
@@ -79,7 +82,7 @@ export async function draftCoverLetter(
   job: { title: string; company: string; description: string | null }
 ): Promise<string> {
   const res = await client.messages.create({
-    model: MODEL,
+    model: DRAFT_MODEL,
     max_tokens: 2048,
     system:
       "You write short, specific cover letters. 150-200 words. No fluff, no 'I am writing to express'. Open with a concrete hook tying the candidate's strongest relevant work to the company's need. Plain text only.",
@@ -106,7 +109,7 @@ export async function draftOutreachEmail(
   contact: { name: string | null; title: string | null }
 ) {
   const res = await client.messages.parse({
-    model: MODEL,
+    model: DRAFT_MODEL,
     max_tokens: 1024,
     output_config: { format: zodOutputFormat(EmailSchema) },
     system:
@@ -127,7 +130,7 @@ export async function draftBizdevPitch(
   lead: { name: string; category: string | null; region: string | null; website: string | null }
 ) {
   const res = await client.messages.parse({
-    model: MODEL,
+    model: DRAFT_MODEL,
     max_tokens: 1024,
     output_config: { format: zodOutputFormat(EmailSchema) },
     system:
