@@ -10,7 +10,7 @@ export async function GET() {
     .prepare(
       `SELECT a.*, j.title, j.company, j.url, j.apply_url, j.source
        FROM apps a JOIN jobs j ON j.id = a.job_id
-       WHERE a.status IN ('draft','failed') ORDER BY a.id DESC`
+       WHERE a.status IN ('draft','failed','manual') ORDER BY a.id DESC`
     )
     .all();
   const emails = db
@@ -60,6 +60,16 @@ export async function POST(req: NextRequest) {
   if (!app) return NextResponse.json({ error: "Not found" }, { status: 404 });
   if (!app.apply_url)
     return NextResponse.json({ error: "No apply URL — apply manually via job link" }, { status: 400 });
+
+  // Only Greenhouse and Lever expose a real hosted application form. Aggregator
+  // sources link to a listing page, where a stray submit button could be a
+  // newsletter signup — never drive a form we can't identify.
+  const AUTOMATABLE = new Set(["greenhouse", "lever"]);
+  if (!AUTOMATABLE.has(app.source)) {
+    const detail = `${app.source} links to a listing page, not an application form — auto-apply skipped. Cover letter is ready above: open ${app.apply_url}, paste it, and submit.`;
+    db.prepare("UPDATE apps SET status='manual', error=? WHERE id=?").run(detail, id);
+    return NextResponse.json({ ok: false, manual: true, detail }, { status: 422 });
+  }
 
   const { resume, resumePath } = getProfile();
   if (!resume || !resumePath)

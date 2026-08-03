@@ -15,6 +15,9 @@ type AppDraft = {
   source: string;
 };
 
+// Sources that expose a real hosted application form Playwright can fill.
+const AUTOMATABLE = new Set(["greenhouse", "lever"]);
+
 type EmailDraft = {
   id: number;
   kind: string;
@@ -95,7 +98,7 @@ export default function Queue() {
                   <a href={a.url} target="_blank" rel="noreferrer" className="cursor-pointer text-xs text-accent hover:underline">
                     {a.apply_url ?? a.url}
                   </a>
-                  {a.status === "failed" && (
+                  {(a.status === "failed" || a.status === "manual") && (
                     <p className="mt-2 text-xs text-warn">{a.error}</p>
                   )}
                 </div>
@@ -109,12 +112,25 @@ export default function Queue() {
               />
               <div className="mt-3 flex items-center gap-2">
                 <button
-                  onClick={() => act("app", a.id, "approve")}
+                  onClick={async () => {
+                    // Aggregator listings have no form to drive — hand the user
+                    // the letter and the page instead of pretending to apply.
+                    if (!AUTOMATABLE.has(a.source)) {
+                      const letter = edits[k]?.body ?? a.cover_letter;
+                      await navigator.clipboard.writeText(letter).catch(() => {});
+                      window.open(a.apply_url ?? a.url, "_blank", "noopener");
+                    }
+                    act("app", a.id, "approve");
+                  }}
                   disabled={busy === k}
                   className="btn-primary"
                 >
                   <IconCheck className="h-4 w-4" />
-                  {busy === k ? "Applying…" : "Approve & auto-apply"}
+                  {busy === k
+                    ? "Working…"
+                    : AUTOMATABLE.has(a.source)
+                      ? "Approve & auto-apply"
+                      : "Copy letter & open form"}
                 </button>
                 <button onClick={() => act("app", a.id, "discard")} className="btn-danger">
                   <IconX className="h-4 w-4" /> Discard
