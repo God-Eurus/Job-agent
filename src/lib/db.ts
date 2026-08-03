@@ -1,9 +1,8 @@
 import Database from "better-sqlite3";
 import path from "path";
-import fs from "fs";
+import { DATA_DIR, ensureDataDirs } from "./paths";
 
-const DATA_DIR = path.join(process.cwd(), "data");
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+ensureDataDirs();
 
 const db = new Database(path.join(DATA_DIR, "agent.db"));
 db.pragma("journal_mode = WAL");

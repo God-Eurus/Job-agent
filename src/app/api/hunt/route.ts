@@ -22,9 +22,10 @@ export async function POST() {
   });
 
   // Score newest unscored jobs (cap per run to bound cost)
+  const scoreLimit = Number(process.env.SCORE_LIMIT_PER_HUNT ?? 60);
   const unscored = db
-    .prepare("SELECT * FROM jobs WHERE score IS NULL ORDER BY id DESC LIMIT 25")
-    .all() as Array<{
+    .prepare("SELECT * FROM jobs WHERE score IS NULL ORDER BY id DESC LIMIT ?")
+    .all(scoreLimit) as Array<{
     id: number;
     title: string;
     company: string;

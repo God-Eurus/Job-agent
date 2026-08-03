@@ -50,13 +50,28 @@ export async function fetchRemoteOK(keywords: string[]): Promise<RawJob[]> {
     }));
 }
 
+// Remotive searches one term per request — query the top keywords in parallel.
 export async function fetchRemotive(keywords: string[]): Promise<RawJob[]> {
-  const q = keywords[0] ? `?search=${encodeURIComponent(keywords[0])}` : "";
-  const data = (await getJSON(`https://remotive.com/api/remote-jobs${q}&limit=100`)) as {
-    jobs: Array<Record<string, unknown>>;
-  };
-  return data.jobs
-    .filter((j) => matchesKeywords(`${j.title} ${j.tags}`, keywords))
+  const terms = keywords.length ? keywords.slice(0, 4) : [""];
+  const batches = await Promise.allSettled(
+    terms.map((t) =>
+      getJSON(
+        `https://remotive.com/api/remote-jobs?limit=100${t ? `&search=${encodeURIComponent(t)}` : ""}`
+      ) as Promise<{ jobs: Array<Record<string, unknown>> }>
+    )
+  );
+  const seen = new Set<unknown>();
+  const jobs: Array<Record<string, unknown>> = [];
+  for (const b of batches) {
+    if (b.status !== "fulfilled") continue;
+    for (const j of b.value.jobs) {
+      if (seen.has(j.id)) continue;
+      seen.add(j.id);
+      jobs.push(j);
+    }
+  }
+  return jobs
+    .filter((j) => matchesKeywords(`${j.title} ${j.tags} ${j.category}`, keywords))
     .map((j) => ({
       source: "remotive",
       external_id: `remotive-${j.id}`,

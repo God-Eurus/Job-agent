@@ -20,6 +20,9 @@ fi
 rm -rf .next/standalone/.next/static
 cp -R .next/static .next/standalone/.next/static
 
+# Standalone runs with cwd=.next/standalone — pin the data dir to the project root
+export DATA_DIR="$PWD/data"
+
 PORT=3040 HOSTNAME=127.0.0.1 node .next/standalone/server.js &
 SERVER_PID=$!
 trap 'kill $SERVER_PID 2>/dev/null' EXIT

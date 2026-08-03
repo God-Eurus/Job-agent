@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import path from "path";
 import fs from "fs";
 import db from "@/lib/db";
+import { RESUME_DIR, ensureDataDirs } from "@/lib/paths";
 import { parseResume } from "@/lib/claude";
 
 export const maxDuration = 120;
@@ -14,7 +15,8 @@ export async function POST(req: NextRequest) {
   }
 
   const buf = Buffer.from(await file.arrayBuffer());
-  const savePath = path.join(process.cwd(), "data", "resume", "resume.pdf");
+  ensureDataDirs();
+  const savePath = path.join(RESUME_DIR, "resume.pdf");
   fs.writeFileSync(savePath, buf);
 
   try {
