@@ -23,6 +23,8 @@ async function getJSON(url: string): Promise<unknown> {
   return res.json();
 }
 
+// Favour recall here — Claude scoring downstream does the precision pass.
+// Matching title/tags alone drops jobs that only name the stack in the body.
 function matchesKeywords(text: string, keywords: string[]): boolean {
   if (keywords.length === 0) return true;
   const t = text.toLowerCase();
@@ -32,8 +34,15 @@ function matchesKeywords(text: string, keywords: string[]): boolean {
 export async function fetchRemoteOK(keywords: string[]): Promise<RawJob[]> {
   const data = (await getJSON("https://remoteok.com/api")) as Array<Record<string, unknown>>;
   return data
-    .filter((j) => j.id && j.position)
-    .filter((j) => matchesKeywords(`${j.position} ${(j.tags as string[])?.join(" ") ?? ""}`, keywords))
+    // The feed mixes blog posts and nav entries in with real postings; genuine
+    // jobs always carry a company and a posting date.
+    .filter((j) => j.id && j.position && j.company && j.date)
+    .filter((j) =>
+      matchesKeywords(
+        `${j.position} ${(j.tags as string[])?.join(" ") ?? ""} ${String(j.description ?? "").slice(0, 2000)}`,
+        keywords
+      )
+    )
     .map((j) => ({
       source: "remoteok",
       external_id: `remoteok-${j.id}`,
@@ -71,7 +80,12 @@ export async function fetchRemotive(keywords: string[]): Promise<RawJob[]> {
     }
   }
   return jobs
-    .filter((j) => matchesKeywords(`${j.title} ${j.tags} ${j.category}`, keywords))
+    .filter((j) =>
+      matchesKeywords(
+        `${j.title} ${j.tags} ${j.category} ${String(j.description ?? "").slice(0, 2000)}`,
+        keywords
+      )
+    )
     .map((j) => ({
       source: "remotive",
       external_id: `remotive-${j.id}`,
@@ -92,7 +106,12 @@ export async function fetchArbeitnow(keywords: string[]): Promise<RawJob[]> {
     data: Array<Record<string, unknown>>;
   };
   return data.data
-    .filter((j) => matchesKeywords(`${j.title} ${(j.tags as string[])?.join(" ") ?? ""}`, keywords))
+    .filter((j) =>
+      matchesKeywords(
+        `${j.title} ${(j.tags as string[])?.join(" ") ?? ""} ${String(j.description ?? "").slice(0, 2000)}`,
+        keywords
+      )
+    )
     .map((j) => ({
       source: "arbeitnow",
       external_id: `arbeitnow-${j.slug}`,
