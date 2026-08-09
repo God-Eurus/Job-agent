@@ -12,6 +12,14 @@ if [ -z "${DASHBOARD_PASSWORD:-}" ]; then
   exit 1
 fi
 
+# A previous run may still hold the port — take it over rather than failing.
+if lsof -ti tcp:3040 >/dev/null 2>&1; then
+  echo "Port 3040 busy — stopping the previous instance…"
+  lsof -ti tcp:3040 | xargs kill 2>/dev/null || true
+  pkill -f "cloudflared tunnel --url http://127.0.0.1:3040" 2>/dev/null || true
+  sleep 1
+fi
+
 # Build if standalone output missing or stale
 if [ ! -f .next/standalone/server.js ]; then
   npm run build
