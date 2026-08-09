@@ -93,17 +93,33 @@ export default function Jobs() {
     };
   }, [jobs]);
 
-  async function hunt() {
+  async function hunt(rescore = false) {
     setHunting(true);
     try {
-      const res = await fetch("/api/hunt", { method: "POST" });
+      const res = await fetch("/api/hunt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rescore }),
+      });
       const d = await res.json();
-      if (!res.ok) toast("error", d.error ?? "Hunt failed");
-      else
+      if (!res.ok) {
+        toast("error", d.error ?? "Hunt failed");
+      } else if (rescore) {
+        toast("ok", `Re-scored ${d.scored} jobs · ${d.matched} now match`);
+      } else if (d.inserted === 0) {
+        // Boards only surface new postings as companies publish them, so an
+        // empty run is normal — say so instead of reporting a bare zero.
+        toast(
+          "info",
+          `No new postings — all ${d.fetched} were already in your list. Try again later, or widen keywords in Profile.`
+        );
+      } else {
         toast(
           "ok",
-          `${d.inserted} new of ${d.fetched} fetched · ${d.scored} scored`
+          `${d.inserted} new of ${d.fetched} fetched · ${d.scored} scored · ${d.matched} match` +
+            (d.unscoredRemaining ? ` · ${d.unscoredRemaining} left to score` : "")
         );
+      }
       await load();
     } catch (e) {
       toast("error", String(e));
@@ -190,10 +206,20 @@ export default function Jobs() {
             prep · <kbd className="mono text-ink">/</kbd> search
           </p>
         </div>
-        <button onClick={hunt} disabled={hunting} className="btn-primary">
-          <IconRefresh className={`h-3.5 w-3.5 ${hunting ? "animate-spin" : ""}`} />
-          {hunting ? "Hunting…" : "Hunt latest"}
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={() => hunt(true)}
+            disabled={hunting}
+            className="btn-ghost"
+            title="Re-score existing jobs against your current preferences. Use after editing your profile."
+          >
+            Re-score
+          </button>
+          <button onClick={() => hunt()} disabled={hunting} className="btn-primary">
+            <IconRefresh className={`h-3.5 w-3.5 ${hunting ? "animate-spin" : ""}`} />
+            {hunting ? "Working…" : "Hunt latest"}
+          </button>
+        </div>
       </header>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -272,7 +298,7 @@ export default function Jobs() {
             }
             action={
               !q && filter === "matched" ? (
-                <button onClick={hunt} disabled={hunting} className="btn-primary">
+                <button onClick={() => hunt()} disabled={hunting} className="btn-primary">
                   <IconRefresh className={`h-3.5 w-3.5 ${hunting ? "animate-spin" : ""}`} />
                   Hunt latest
                 </button>
