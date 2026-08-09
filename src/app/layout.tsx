@@ -9,7 +9,9 @@ import {
   IconStore,
   IconMail,
   IconZap,
+  IconCheck,
 } from "@/components/icons";
+import { gmailReady } from "@/lib/gmail";
 import "./globals.css";
 
 const firaCode = Fira_Code({
@@ -36,7 +38,10 @@ const nav = [
   { href: "/bizdev", label: "Freelance Leads", Icon: IconStore },
 ];
 
+export const dynamic = "force-dynamic";
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
+  const gmailConnected = gmailReady();
   return (
     <html lang="en" className={`${firaCode.variable} ${firaSans.variable}`}>
       <body>
@@ -65,10 +70,24 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <div className="border-t border-line p-3">
               <a
                 href="/api/gmail/auth"
-                className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-line px-3 py-2.5 text-xs font-medium text-ink-muted transition-colors duration-200 hover:border-accent/50 hover:text-accent"
+                title={gmailConnected ? "Gmail connected — click to reconnect" : "Connect Gmail to send approved emails"}
+                className={`flex cursor-pointer items-center justify-center gap-2 rounded-lg border px-3 py-2.5 text-xs font-medium transition-colors duration-200 ${
+                  gmailConnected
+                    ? "border-accent/40 bg-accent/5 text-accent hover:bg-accent/10"
+                    : "border-line text-ink-muted hover:border-accent/50 hover:text-accent"
+                }`}
               >
-                <IconMail className="h-4 w-4" />
-                Connect Gmail
+                {gmailConnected ? (
+                  <>
+                    <IconCheck className="h-4 w-4" />
+                    Gmail connected
+                  </>
+                ) : (
+                  <>
+                    <IconMail className="h-4 w-4" />
+                    Connect Gmail
+                  </>
+                )}
               </a>
             </div>
           </aside>
