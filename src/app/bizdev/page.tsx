@@ -1,6 +1,7 @@
 "use client";
-import { useEffect, useState } from "react";
-import { IconSearch, IconZap, IconLink } from "@/components/icons";
+import { useEffect, useMemo, useState } from "react";
+import { IconSearch, IconZap, IconExternal, IconStore, IconGlobe } from "@/components/icons";
+import { EmptyState, SkeletonRows, StatusBadge, useToast } from "@/components/ui";
 
 type Lead = {
   id: number;
@@ -15,151 +16,233 @@ type Lead = {
   status: string;
 };
 
+const PRESETS = ["restaurants", "gyms", "salons", "boutiques", "cafes", "dentists", "hotels"];
+
 export default function Bizdev() {
-  const [leads, setLeads] = useState<Lead[]>([]);
+  const toast = useToast();
+  const [leads, setLeads] = useState<Lead[] | null>(null);
   const [region, setRegion] = useState("");
   const [category, setCategory] = useState("");
   const [searching, setSearching] = useState(false);
   const [pitching, setPitching] = useState<number | null>(null);
-  const [msg, setMsg] = useState<string | null>(null);
+  const [onlyWeak, setOnlyWeak] = useState(true);
 
   const load = () =>
-    fetch("/api/bizdev").then((r) => r.json()).then((d) => setLeads(d.leads ?? []));
+    fetch("/api/bizdev")
+      .then((r) => r.json())
+      .then((d) => setLeads(d.leads ?? []))
+      .catch(() => setLeads([]));
 
   useEffect(() => {
     load();
   }, []);
 
   async function search() {
-    if (!region || !category) return setMsg("Enter both region and business type.");
+    if (!region.trim() || !category.trim()) {
+      toast("error", "Enter both a region and a business type");
+      return;
+    }
     setSearching(true);
-    setMsg(null);
-    const res = await fetch("/api/bizdev", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "search", region, category }),
-    });
-    const d = await res.json();
-    setSearching(false);
-    setMsg(res.ok ? `Found ${d.found}, ${d.inserted} new leads.` : d.error);
-    load();
+    try {
+      const res = await fetch("/api/bizdev", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "search", region, category }),
+      });
+      const d = await res.json();
+      if (!res.ok) toast("error", d.error ?? "Search failed");
+      else toast("ok", `${d.inserted} new lead${d.inserted === 1 ? "" : "s"} from ${d.found} found`);
+      await load();
+    } catch (e) {
+      toast("error", String(e));
+    } finally {
+      setSearching(false);
+    }
   }
 
-  async function pitch(leadId: number) {
-    setPitching(leadId);
-    setMsg(null);
-    const res = await fetch("/api/bizdev", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "pitch", leadId }),
-    });
-    const d = await res.json();
-    setPitching(null);
-    setMsg(res.ok ? `Pitch drafted to ${d.email} — review in queue.` : d.error);
-    load();
+  async function pitch(lead: Lead) {
+    setPitching(lead.id);
+    try {
+      const res = await fetch("/api/bizdev", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "pitch", leadId: lead.id }),
+      });
+      const d = await res.json();
+      if (!res.ok) toast(d.phoneOnly ? "info" : "error", d.error ?? "Pitch failed");
+      else toast("ok", `Pitch drafted to ${d.email} — review it in the queue`);
+      await load();
+    } catch (e) {
+      toast("error", String(e));
+    } finally {
+      setPitching(null);
+    }
   }
+
+  const isWeak = (l: Lead) =>
+    !l.website || /facebook\.com|instagram\.com|wa\.me|linktr\.ee/i.test(l.website);
+
+  const visible = useMemo(() => {
+    const list = leads ?? [];
+    return onlyWeak ? list.filter(isWeak) : list;
+  }, [leads, onlyWeak]);
+
+  const weakCount = (leads ?? []).filter(isWeak).length;
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6">
+    <div className="mx-auto max-w-6xl space-y-5">
       <header>
         <h1 className="text-2xl font-semibold tracking-tight">Freelance Leads</h1>
-        <p className="mt-1 text-sm text-ink-muted">
-          Find businesses with weak or missing websites in a region. Pitch = find email + draft into queue.
+        <p className="mt-1 max-w-2xl text-sm leading-relaxed text-ink-muted">
+          Find businesses in a region with a weak or missing web presence.{" "}
+          <strong className="font-medium text-ink">Pitch</strong> finds an email and drafts a
+          website / e-commerce offer into the approval queue.
         </p>
       </header>
 
-      <div className="card flex items-end gap-3 p-5">
-        <label className="flex-1">
-          <span className="mb-1.5 block text-sm font-medium">Region</span>
-          <input
-            className="input"
-            placeholder="Jaipur, India"
-            value={region}
-            onChange={(e) => setRegion(e.target.value)}
-          />
-        </label>
-        <label className="flex-1">
-          <span className="mb-1.5 block text-sm font-medium">Business type</span>
-          <input
-            className="input"
-            placeholder="restaurants, gyms, boutiques"
-            value={category}
-            onChange={(e) => setCategory(e.target.value)}
-          />
-        </label>
-        <button onClick={search} disabled={searching} className="btn-primary h-[38px]">
-          <IconSearch className="h-4 w-4" />
-          {searching ? "Searching…" : "Search"}
-        </button>
+      <div className="card space-y-3 p-5">
+        <div className="grid gap-3 sm:grid-cols-[1fr_1fr_auto]">
+          <div>
+            <label htmlFor="region" className="mb-1.5 block text-sm font-medium">
+              Region
+            </label>
+            <input
+              id="region"
+              className="input"
+              placeholder="Jaipur, India"
+              value={region}
+              onChange={(e) => setRegion(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && search()}
+            />
+          </div>
+          <div>
+            <label htmlFor="category" className="mb-1.5 block text-sm font-medium">
+              Business type
+            </label>
+            <input
+              id="category"
+              className="input"
+              placeholder="restaurants"
+              value={category}
+              onChange={(e) => setCategory(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && search()}
+            />
+          </div>
+          <div className="flex items-end">
+            <button onClick={search} disabled={searching} className="btn-primary w-full sm:w-auto">
+              <IconSearch className="h-4 w-4" />
+              {searching ? "Searching…" : "Search"}
+            </button>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2 pt-1">
+          <span className="text-xs text-ink-muted">Quick pick:</span>
+          {PRESETS.map((p) => (
+            <button key={p} onClick={() => setCategory(p)} data-active={category === p} className="chip">
+              {p}
+            </button>
+          ))}
+        </div>
       </div>
 
-      {msg && (
-        <p className="rounded-lg border border-line bg-surface px-4 py-3 text-sm text-ink-muted">{msg}</p>
+      {(leads?.length ?? 0) > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <button onClick={() => setOnlyWeak(true)} data-active={onlyWeak} className="chip">
+            No / weak website <span className="mono text-[11px] opacity-70">{weakCount}</span>
+          </button>
+          <button onClick={() => setOnlyWeak(false)} data-active={!onlyWeak} className="chip">
+            All leads <span className="mono text-[11px] opacity-70">{leads?.length ?? 0}</span>
+          </button>
+        </div>
       )}
 
-      <div className="card overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-line text-left text-xs text-ink-muted">
-              <th className="mono px-5 py-3 font-medium">business</th>
-              <th className="mono px-3 py-3 font-medium">web presence</th>
-              <th className="mono px-3 py-3 font-medium">contact</th>
-              <th className="mono px-3 py-3 font-medium">status</th>
-              <th className="px-5 py-3" />
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-line">
-            {leads.map((l) => (
-              <tr key={l.id} className="group transition-colors duration-150 hover:bg-surface-2/50">
-                <td className="px-5 py-3.5">
-                  <div className="font-medium">{l.name}</div>
-                  <div className="text-xs text-ink-muted">
-                    {l.category} · {l.region} {l.rating ? `· ★ ${l.rating}` : ""}
+      <div className="card">
+        {leads === null ? (
+          <SkeletonRows rows={5} />
+        ) : visible.length === 0 ? (
+          <EmptyState
+            icon={IconStore}
+            title={(leads?.length ?? 0) > 0 ? "No leads match this filter" : "No leads yet"}
+            hint={
+              (leads?.length ?? 0) > 0
+                ? "Switch to All leads to see businesses that already have a site."
+                : "Search a region and business type above. Requires GOOGLE_PLACES_API_KEY."
+            }
+          />
+        ) : (
+          <ul className="divide-y divide-line">
+            {visible.map((l) => (
+              <li
+                key={l.id}
+                className="flex flex-col gap-3 px-4 py-4 transition-colors duration-150 hover:bg-surface-2/40 sm:flex-row sm:items-center sm:px-5"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-medium">{l.name}</span>
+                    <StatusBadge status={l.status} />
+                    {isWeak(l) && (
+                      <span className="mono px-1.5 py-0.5 text-[11px] text-warn ring-1 ring-warn/25">
+                        needs a site
+                      </span>
+                    )}
                   </div>
-                </td>
-                <td className="px-3 py-3.5">
-                  {l.website ? (
+                  <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-ink-muted">
+                    <span>{l.category}</span>
+                    <span aria-hidden>·</span>
+                    <span>{l.region}</span>
+                    {l.rating != null && (
+                      <>
+                        <span aria-hidden>·</span>
+                        <span>★ {l.rating}</span>
+                      </>
+                    )}
+                  </div>
+                  <div className="mt-1 flex flex-wrap items-center gap-3 text-xs">
+                    {l.website ? (
+                      <a
+                        href={l.website}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex cursor-pointer items-center gap-1 text-ink hover:underline"
+                      >
+                        <IconGlobe className="h-3 w-3" /> site
+                      </a>
+                    ) : (
+                      <span className="text-ink-muted">no website</span>
+                    )}
+                    {l.email && <span className="text-ink-muted">{l.email}</span>}
+                    {l.phone && <span className="text-ink-muted">{l.phone}</span>}
+                  </div>
+                </div>
+
+                <div className="flex shrink-0 items-center gap-2">
+                  {l.website && (
                     <a
                       href={l.website}
                       target="_blank"
                       rel="noreferrer"
-                      className="inline-flex cursor-pointer items-center gap-1 text-xs text-accent hover:underline"
+                      className="btn-ghost"
+                      aria-label={`Open website for ${l.name}`}
                     >
-                      <IconLink className="h-3.5 w-3.5" /> site
+                      <IconExternal className="h-4 w-4" />
                     </a>
-                  ) : (
-                    <span className="mono rounded-md bg-warn/15 px-2 py-0.5 text-xs font-medium text-warn">
-                      no website
-                    </span>
                   )}
-                </td>
-                <td className="px-3 py-3.5 text-xs text-ink-muted">
-                  {l.email ?? l.phone ?? "—"}
-                </td>
-                <td className="mono px-3 py-3.5 text-xs text-ink-muted">{l.status}</td>
-                <td className="px-5 py-3.5 text-right">
                   {l.status === "new" && (
                     <button
-                      onClick={() => pitch(l.id)}
+                      onClick={() => pitch(l)}
                       disabled={pitching === l.id}
-                      className="btn-primary opacity-0 transition-opacity duration-150 group-hover:opacity-100"
+                      className="btn-primary"
                     >
                       <IconZap className="h-4 w-4" />
                       {pitching === l.id ? "Drafting…" : "Pitch"}
                     </button>
                   )}
-                </td>
-              </tr>
+                </div>
+              </li>
             ))}
-            {leads.length === 0 && (
-              <tr>
-                <td colSpan={5} className="px-5 py-10 text-center text-sm text-ink-muted">
-                  No leads yet. Search a region + business type. Requires GOOGLE_PLACES_API_KEY.
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+          </ul>
+        )}
       </div>
     </div>
   );

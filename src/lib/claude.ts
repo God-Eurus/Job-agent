@@ -97,6 +97,29 @@ export async function draftCoverLetter(
   return block?.type === "text" ? block.text : "";
 }
 
+// Rewrite an existing draft against a free-text instruction ("make it shorter",
+// "lead with the Shopify work") so the user can iterate without starting over.
+export async function refineDraft(
+  current: string,
+  instruction: string,
+  context: string
+): Promise<string> {
+  const res = await client.messages.create({
+    model: DRAFT_MODEL,
+    max_tokens: 2048,
+    system:
+      "You revise job-application and outreach copy. Apply the user's instruction to their draft and return ONLY the revised text — no preamble, no explanation, no markdown fences. Keep any factual claims already present; never invent new ones.",
+    messages: [
+      {
+        role: "user",
+        content: `Context: ${context}\n\nCurrent draft:\n"""\n${current}\n"""\n\nInstruction: ${instruction}`,
+      },
+    ],
+  });
+  const block = res.content.find((b) => b.type === "text");
+  return block?.type === "text" ? block.text.trim() : current;
+}
+
 const EmailSchema = z.object({
   subject: z.string().describe("Under 60 chars, specific, no clickbait"),
   body: z.string().describe("Plain-text email body"),

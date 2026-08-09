@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import db, { getProfile } from "@/lib/db";
 import { sendEmail } from "@/lib/gmail";
 import { autoApply } from "@/lib/apply";
+import { refineDraft } from "@/lib/claude";
 
 export const maxDuration = 300;
 
@@ -21,7 +22,42 @@ export async function GET() {
 
 // { type: "app"|"email", id, action: "approve"|"discard", body?, subject? }
 export async function POST(req: NextRequest) {
-  const { type, id, action, body, subject } = await req.json();
+  const { type, id, action, body, subject, instruction } = await req.json();
+
+  // Iterate on a draft in place — "make it shorter", "lead with the Shopify work".
+  if (action === "refine") {
+    if (!instruction?.trim())
+      return NextResponse.json({ error: "No instruction given" }, { status: 400 });
+
+    if (type === "app") {
+      const row = db
+        .prepare(
+          `SELECT a.cover_letter, j.title, j.company FROM apps a
+           JOIN jobs j ON j.id = a.job_id WHERE a.id = ?`
+        )
+        .get(id) as { cover_letter: string; title: string; company: string } | undefined;
+      if (!row) return NextResponse.json({ error: "Not found" }, { status: 404 });
+      const revised = await refineDraft(
+        body ?? row.cover_letter,
+        instruction,
+        `Cover letter for ${row.title} at ${row.company}`
+      );
+      db.prepare("UPDATE apps SET cover_letter = ? WHERE id = ?").run(revised, id);
+      return NextResponse.json({ ok: true, text: revised });
+    }
+
+    const row = db.prepare("SELECT subject, body, company, kind FROM emails WHERE id = ?").get(id) as
+      | { subject: string; body: string; company: string | null; kind: string }
+      | undefined;
+    if (!row) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    const revised = await refineDraft(
+      body ?? row.body,
+      instruction,
+      `${row.kind === "bizdev" ? "Freelance pitch" : "Cold outreach"} email to ${row.company ?? "a company"}`
+    );
+    db.prepare("UPDATE emails SET body = ? WHERE id = ?").run(revised, id);
+    return NextResponse.json({ ok: true, text: revised });
+  }
 
   if (action === "discard") {
     if (type === "app") db.prepare("UPDATE apps SET status='discarded' WHERE id=?").run(id);

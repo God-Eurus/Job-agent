@@ -31,7 +31,7 @@ export const IconInbox = (p: IconProps) => (
   <Svg {...p} d="M22 12h-6l-2 3h-4l-2-3H2 M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
 );
 export const IconStore = (p: IconProps) => (
-  <Svg {...p} d="m2 7 4.41-4.41A2 2 0 0 1 7.83 2h8.34a2 2 0 0 1 1.42.59L22 7 M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8 M15 22v-4a2 2 0 0 0-2-2h-2a2 2 0 0 0-2 2v4 M2 7h20 M22 7v3a2 2 0 0 1-2 2a2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 16 12a2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 12 12a2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 8 12a2.7 2.7 0 0 1-1.59-.63.7.7 0 0 0-.82 0A2.7 2.7 0 0 1 4 12a2 2 0 0 1-2-2V7" />
+  <Svg {...p} d="m2 7 4.41-4.41A2 2 0 0 1 7.83 2h8.34a2 2 0 0 1 1.42.59L22 7 M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8 M15 22v-4a2 2 0 0 0-2-2h-2a2 2 0 0 0-2 2v4 M2 7h20" />
 );
 export const IconMail = (p: IconProps) => (
   <Svg {...p} d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7 M2 5h20v14H2z" />
@@ -55,4 +55,27 @@ export const IconRefresh = (p: IconProps) => (
 );
 export const IconLink = (p: IconProps) => (
   <Svg {...p} d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71 M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+);
+export const IconAlert = (p: IconProps) => (
+  <Svg {...p} d="M12 9v4 M12 17h.01 M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+);
+export const IconCopy = (p: IconProps) => (
+  <Svg {...p} d="M20 8H10a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2z M4 16a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2" />
+);
+export const IconExternal = (p: IconProps) => (
+  <Svg {...p} d="M15 3h6v6 M10 14 21 3 M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+);
+export const IconMenu = (p: IconProps) => <Svg {...p} d="M4 6h16 M4 12h16 M4 18h16" />;
+export const IconChevronDown = (p: IconProps) => <Svg {...p} d="m6 9 6 6 6-6" />;
+export const IconCircleCheck = (p: IconProps) => (
+  <Svg {...p} d="M22 11.08V12a10 10 0 1 1-5.93-9.14 M22 4 12 14.01l-3-3" />
+);
+export const IconCircleDot = (p: IconProps) => (
+  <Svg {...p} d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z M12 10a2 2 0 1 0 0 4 2 2 0 0 0 0-4z" />
+);
+export const IconGlobe = (p: IconProps) => (
+  <Svg {...p} d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z M2 12h20 M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+);
+export const IconTrash = (p: IconProps) => (
+  <Svg {...p} d="M3 6h18 M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2 M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
 );
