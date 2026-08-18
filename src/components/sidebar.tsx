@@ -21,9 +21,10 @@ const nav = [
   { href: "/jobs", label: "Jobs", Icon: IconBriefcase, badge: "matched" as const },
   { href: "/queue", label: "Approval Queue", Icon: IconInbox, badge: "pending" as const },
   { href: "/bizdev", label: "Freelance Leads", Icon: IconStore, badge: "leads" as const },
+  { href: "/completed", label: "Completed", Icon: IconCheck, badge: "done" as const },
 ];
 
-type Counts = { matched: number; pending: number; leads: number };
+type Counts = { matched: number; pending: number; leads: number; done: number };
 
 export default function Sidebar({ gmailConnected }: { gmailConnected: boolean }) {
   const pathname = usePathname();

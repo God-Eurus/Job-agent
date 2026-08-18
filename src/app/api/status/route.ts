@@ -19,7 +19,10 @@ export async function GET() {
         (SELECT COUNT(*) FROM apps WHERE status IN ('draft','failed','manual')) +
         (SELECT COUNT(*) FROM emails WHERE status IN ('draft','failed')) AS pending,
         (SELECT COUNT(*) FROM emails WHERE status = 'sent') AS sent,
-        (SELECT COUNT(*) FROM leads) AS leads`
+        (SELECT COUNT(*) FROM leads) AS leads,
+        (SELECT COUNT(*) FROM apps WHERE status IN ('applied','manual')) +
+        (SELECT COUNT(*) FROM emails WHERE status = 'sent') +
+        (SELECT COUNT(*) FROM leads WHERE status IN ('pitched','won','done','dead')) AS done`
     )
     .get() as Record<string, number>;
 

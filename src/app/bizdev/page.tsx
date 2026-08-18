@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { IconSearch, IconZap, IconExternal, IconStore, IconGlobe } from "@/components/icons";
+import { IconSearch, IconZap, IconExternal, IconStore, IconGlobe, IconCheck } from "@/components/icons";
 import { EmptyState, SkeletonRows, StatusBadge, useToast } from "@/components/ui";
 
 type Lead = {
@@ -83,6 +83,25 @@ export default function Bizdev() {
       else if (d.channel === "whatsapp")
         toast("ok", `WhatsApp pitch drafted for +${d.phone} — review it in the queue`);
       else toast("ok", `Pitch drafted to ${d.email} — review it in the queue`);
+      await load(active);
+    } catch (e) {
+      toast("error", String(e));
+    } finally {
+      setPitching(null);
+    }
+  }
+
+  // Mark a lead handled without pitching it — contacted elsewhere, or not a fit.
+  async function markDone(lead: Lead) {
+    setPitching(lead.id);
+    try {
+      const res = await fetch("/api/completed", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ leadId: lead.id, status: "done" }),
+      });
+      if (!res.ok) toast("error", "Update failed");
+      else toast("ok", `${lead.name} filed under Completed`);
       await load(active);
     } catch (e) {
       toast("error", String(e));
@@ -257,14 +276,25 @@ export default function Bizdev() {
                     </a>
                   )}
                   {l.status === "new" && (
-                    <button
-                      onClick={() => pitch(l)}
-                      disabled={pitching === l.id}
-                      className="btn-primary"
-                    >
-                      <IconZap className="h-4 w-4" />
-                      {pitching === l.id ? "Drafting…" : "Pitch"}
-                    </button>
+                    <>
+                      <button
+                        onClick={() => pitch(l)}
+                        disabled={pitching === l.id}
+                        className="btn-primary"
+                      >
+                        <IconZap className="h-4 w-4" />
+                        {pitching === l.id ? "Drafting…" : "Pitch"}
+                      </button>
+                      <button
+                        onClick={() => markDone(l)}
+                        disabled={pitching === l.id}
+                        className="btn-ghost"
+                        title="Already handled — file under Completed"
+                      >
+                        <IconCheck className="h-4 w-4" />
+                        Done
+                      </button>
+                    </>
                   )}
                 </div>
               </li>
