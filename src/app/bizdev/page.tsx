@@ -26,21 +26,27 @@ export default function Bizdev() {
   const [searching, setSearching] = useState(false);
   const [pitching, setPitching] = useState<number | null>(null);
   const [onlyWeak, setOnlyWeak] = useState(true);
-  const [regions, setRegions] = useState<Array<{ region: string; n: number }>>([]);
+  const [regions, setRegions] = useState<Array<{ city: string; n: number }>>([]);
+  const [categories, setCategories] = useState<Array<{ category: string; n: number }>>([]);
   const [active, setActive] = useState<string | null>(null);
+  const [activeCategory, setActiveCategory] = useState<string | null>(null);
 
-  const load = useCallback(
-    (forRegion?: string | null) =>
-      fetch(`/api/bizdev${forRegion ? `?region=${encodeURIComponent(forRegion)}` : ""}`)
-        .then((r) => r.json())
-        .then((d) => {
-          setLeads(d.leads ?? []);
-          setRegions(d.regions ?? []);
-          setActive(d.active ?? null);
-        })
-        .catch(() => setLeads([])),
-    []
-  );
+  const load = useCallback((forCity?: string | null, forCategory?: string | null) => {
+    const params = new URLSearchParams();
+    if (forCity) params.set("region", forCity);
+    if (forCategory) params.set("category", forCategory);
+    const qs = params.toString();
+    return fetch(`/api/bizdev${qs ? `?${qs}` : ""}`)
+      .then((r) => r.json())
+      .then((d) => {
+        setLeads(d.leads ?? []);
+        setRegions(d.regions ?? []);
+        setCategories(d.categories ?? []);
+        setActive(d.active ?? null);
+        setActiveCategory(d.category ?? null);
+      })
+      .catch(() => setLeads([]));
+  }, []);
 
   useEffect(() => {
     load();
@@ -62,7 +68,7 @@ export default function Bizdev() {
       if (!res.ok) toast("error", d.error ?? "Search failed");
       else toast("ok", `${d.inserted} new lead${d.inserted === 1 ? "" : "s"} from ${d.found} found`);
       // Jump the list to what was just searched rather than leaving the old city up.
-      await load(region);
+      await load(region, category);
     } catch (e) {
       toast("error", String(e));
     } finally {
@@ -83,7 +89,7 @@ export default function Bizdev() {
       else if (d.channel === "whatsapp")
         toast("ok", `WhatsApp pitch drafted for +${d.phone} — review it in the queue`);
       else toast("ok", `Pitch drafted to ${d.email} — review it in the queue`);
-      await load(active);
+      await load(active, activeCategory);
     } catch (e) {
       toast("error", String(e));
     } finally {
@@ -102,7 +108,7 @@ export default function Bizdev() {
       });
       if (!res.ok) toast("error", "Update failed");
       else toast("ok", `${lead.name} filed under Completed`);
-      await load(active);
+      await load(active, activeCategory);
     } catch (e) {
       toast("error", String(e));
     } finally {
@@ -179,15 +185,38 @@ export default function Bizdev() {
 
       {regions.length > 1 && (
         <div className="flex flex-wrap items-center gap-2">
-          <span className="label">Searched</span>
+          <span className="label">City</span>
           {regions.map((r) => (
             <button
-              key={r.region}
-              onClick={() => load(r.region)}
-              data-active={active?.trim().toLowerCase() === r.region.trim().toLowerCase()}
+              key={r.city}
+              onClick={() => load(r.city)}
+              data-active={active === r.city}
+              className="chip capitalize"
+            >
+              {r.city} <span className="mono opacity-60">{r.n}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {categories.length > 1 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="label">Type</span>
+          <button
+            onClick={() => load(active, null)}
+            data-active={!activeCategory}
+            className="chip"
+          >
+            All types
+          </button>
+          {categories.map((c) => (
+            <button
+              key={c.category}
+              onClick={() => load(active, c.category)}
+              data-active={activeCategory?.toLowerCase() === c.category.toLowerCase()}
               className="chip"
             >
-              {r.region} <span className="mono opacity-60">{r.n}</span>
+              {c.category} <span className="mono opacity-60">{c.n}</span>
             </button>
           ))}
         </div>
@@ -199,7 +228,7 @@ export default function Bizdev() {
             No / weak website <span className="mono opacity-60">{weakCount}</span>
           </button>
           <button onClick={() => setOnlyWeak(false)} data-active={!onlyWeak} className="chip">
-            All in {active ?? "region"} <span className="mono opacity-60">{leads?.length ?? 0}</span>
+            All in {active ?? "city"} <span className="mono opacity-60">{leads?.length ?? 0}</span>
           </button>
         </div>
       )}

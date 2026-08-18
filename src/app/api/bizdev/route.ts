@@ -32,29 +32,55 @@ function normalisePhone(raw: string | null, region: string | null): string | nul
 export async function GET(req: NextRequest) {
   const region = req.nextUrl.searchParams.get("region");
 
-  // Group case-insensitively so "amsterdam" and "Amsterdam" are one region;
-  // the label shown is whichever spelling was searched most recently.
+  const category = req.nextUrl.searchParams.get("category");
+
+  // One row per city regardless of how it was typed: "jaipur", "Jaipur, India"
+  // and "JAIPUR" all key to `jaipur`. Anything after the first comma is dropped,
+  // so same-name cities in different countries do collapse together — acceptable
+  // for a personal tool, and the alternative is a list full of near-duplicates.
+  const CITY_KEY = `LOWER(TRIM(CASE WHEN INSTR(region, ',') > 0
+      THEN SUBSTR(region, 1, INSTR(region, ',') - 1) ELSE region END))`;
+
   const regions = db
     .prepare(
-      `SELECT region, COUNT(*) AS n, MAX(id) AS recent
+      `SELECT ${CITY_KEY} AS city, COUNT(*) AS n, MAX(id) AS recent
        FROM leads WHERE region IS NOT NULL AND TRIM(region) <> ''
-       GROUP BY LOWER(TRIM(region)) ORDER BY recent DESC`
+       GROUP BY city ORDER BY recent DESC`
     )
-    .all() as Array<{ region: string; n: number }>;
+    .all() as Array<{ city: string; n: number }>;
 
-  // Default to the most recently searched region.
-  const active = region ?? regions[0]?.region ?? null;
+  // Default to the most recently searched city.
+  const activeCity = (region ?? regions[0]?.city ?? "")
+    .split(",")[0]
+    .trim()
+    .toLowerCase();
+  const active = activeCity || null;
 
   const leads = active
-    ? db
+    ? (db
         .prepare(
-          `SELECT * FROM leads WHERE LOWER(TRIM(region)) = LOWER(TRIM(?))
+          `SELECT * FROM leads
+           WHERE ${CITY_KEY} = ?
+             ${category ? "AND LOWER(TRIM(category)) = LOWER(TRIM(?))" : ""}
            ORDER BY id DESC LIMIT 300`
         )
-        .all(active)
+        .all(...(category ? [active, category] : [active])) as Array<
+        Record<string, unknown>
+      >)
     : [];
 
-  return NextResponse.json({ leads, regions, active });
+  // Business types present in this city, so one city can hold several searches.
+  const categories = active
+    ? (db
+        .prepare(
+          `SELECT category, COUNT(*) AS n FROM leads
+           WHERE ${CITY_KEY} = ? AND category IS NOT NULL
+           GROUP BY LOWER(TRIM(category)) ORDER BY n DESC`
+        )
+        .all(active) as Array<{ category: string; n: number }>)
+    : [];
+
+  return NextResponse.json({ leads, regions, categories, active, category });
 }
 
 // { action: "search", region, category } — find businesses in a region
