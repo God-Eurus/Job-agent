@@ -2,26 +2,23 @@
 // without the user hand-configuring slugs. All are public ATS endpoints.
 // Verified live against each provider's public job-board API.
 
+// Slugs verified to resolve — companies that moved off a provider are removed
+// so hunts don't spend requests on 404s.
 export const DEFAULT_GREENHOUSE = [
   "stripe", "figma", "databricks", "airbnb", "dropbox", "coinbase", "robinhood",
-  "instacart", "doordash", "reddit", "discord", "asana", "gitlab", "hashicorp",
+  "instacart", "reddit", "discord", "asana", "gitlab",
   "cloudflare", "twilio", "pinterest", "lyft", "flexport", "affirm", "brex",
-  "notion", "airtable", "amplitude", "mixpanel", "segment", "sentry", "vercel",
-  "netlify", "supabase", "grafana", "elastic", "mongodb", "confluent", "snyk",
-  "postman", "circleci", "algolia", "contentful", "razorpay", "zomato",
-  "swiggy", "cred", "meesho", "groww", "zerodha", "phonepe", "freshworks",
-  "postmanlabs", "browserstack",
+  "airtable", "amplitude", "mixpanel", "vercel",
+  "netlify", "elastic", "mongodb",
+  "postman", "circleci", "algolia", "contentful", "groww", "phonepe",
 ];
 
-export const DEFAULT_LEVER = [
-  "spotify", "shopify", "figma", "ramp", "netlify", "brex", "nubank",
-  "showpad", "voiceflow", "gopuff", "hopper", "kong", "mistralai", "welocalize",
-];
+export const DEFAULT_LEVER = ["spotify", "gopuff"];
 
 export const DEFAULT_ASHBY = [
   "openai", "ramp", "linear", "cursor", "perplexity", "runway", "replit",
   "vanta", "deel", "posthog", "clerk", "mercury", "warp", "modal", "cohere",
-  "elevenlabs", "harvey", "sierra", "together", "scale",
+  "elevenlabs", "harvey", "sierra",
 ];
 
 export const DEFAULT_SMARTRECRUITERS = [
