@@ -165,7 +165,7 @@ export default function Bizdev() {
             <button
               key={r.region}
               onClick={() => load(r.region)}
-              data-active={active === r.region}
+              data-active={active?.trim().toLowerCase() === r.region.trim().toLowerCase()}
               className="chip"
             >
               {r.region} <span className="mono opacity-60">{r.n}</span>
