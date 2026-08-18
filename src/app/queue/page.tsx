@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   IconSend,
   IconX,
@@ -103,22 +103,30 @@ export default function Queue() {
   const [edits, setEdits] = useState<Record<string, { subject?: string; body?: string }>>({});
   // Bumped after a rewrite so uncontrolled textareas pick up the new defaultValue.
   const [rev, setRev] = useState(0);
+  const [view, setView] = useState<"pending" | "done">("pending");
+  const [counts, setCounts] = useState({ pending: 0, done: 0 });
 
-  const load = () =>
-    fetch("/api/queue")
-      .then((r) => r.json())
-      .then((d) => {
-        setApps(d.apps ?? []);
-        setEmails(d.emails ?? []);
-      })
-      .catch(() => {
-        setApps([]);
-        setEmails([]);
-      });
+  const load = useCallback(
+    (which: "pending" | "done" = view) =>
+      fetch(`/api/queue${which === "done" ? "?view=done" : ""}`)
+        .then((r) => r.json())
+        .then((d) => {
+          setApps(d.apps ?? []);
+          setEmails(d.emails ?? []);
+          if (d.counts) setCounts(d.counts);
+        })
+        .catch(() => {
+          setApps([]);
+          setEmails([]);
+        }),
+    [view]
+  );
 
   useEffect(() => {
-    load();
-  }, []);
+    setApps(null);
+    setEmails(null);
+    load(view);
+  }, [view, load]);
 
   async function refine(type: "app" | "email", id: number, instruction: string) {
     const key = `${type}-${id}`;
@@ -149,7 +157,7 @@ export default function Queue() {
     }
   }
 
-  async function act(type: "app" | "email", id: number, action: "approve" | "discard") {
+  async function act(type: "app" | "email", id: number, action: "approve" | "discard" | "done") {
     const key = `${type}-${id}`;
     setBusy(key);
     try {
@@ -160,6 +168,7 @@ export default function Queue() {
       });
       const d = await res.json();
       if (action === "discard") toast("info", "Discarded");
+      else if (action === "done") toast("ok", "Marked complete");
       else if (!res.ok) toast(d.manual ? "info" : "error", d.error ?? d.detail ?? "Failed");
       else if (d.channel === "whatsapp") {
         // No unattended WhatsApp send exists — open the chat prefilled instead.
@@ -183,8 +192,22 @@ export default function Queue() {
       <header>
         <h1 className="text-2xl font-semibold tracking-tight">Approval Queue</h1>
         <p className="mt-1 text-sm leading-relaxed text-ink-muted">
-          Nothing sends or submits without your click. Edit anything inline before approving.
+          {view === "pending"
+            ? "Nothing sends or submits without your click. Edit anything inline before approving."
+            : "Already sent, submitted, or marked done by you."}
         </p>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => setView("pending")}
+            data-active={view === "pending"}
+            className="chip"
+          >
+            Pending <span className="mono opacity-60">{counts.pending}</span>
+          </button>
+          <button onClick={() => setView("done")} data-active={view === "done"} className="chip">
+            Completed <span className="mono opacity-60">{counts.done}</span>
+          </button>
+        </div>
       </header>
 
       <section className="space-y-4">
@@ -198,8 +221,12 @@ export default function Queue() {
           <div className="card">
             <EmptyState
               icon={IconInbox}
-              title="No applications waiting"
-              hint="Prep a matched job on the Jobs page and its cover letter lands here."
+              title={view === "done" ? "No completed applications" : "No applications waiting"}
+              hint={
+                view === "done"
+                  ? "Approving an application, or marking one applied, files it here."
+                  : "Prep a matched job on the Jobs page and its cover letter lands here."
+              }
             />
           </div>
         ) : (
@@ -269,11 +296,18 @@ export default function Queue() {
                   </button>
                 </div>
 
-                <RefineBar
-                  busy={busy === k}
-                  onRefine={(instruction) => refine("app", a.id, instruction)}
-                />
+                {view === "pending" && (
+                  <RefineBar
+                    busy={busy === k}
+                    onRefine={(instruction) => refine("app", a.id, instruction)}
+                  />
+                )}
 
+                {view === "done" ? (
+                  <div className="mt-3 flex items-center gap-2 text-[13px] text-ok">
+                    <IconCheck className="h-4 w-4" /> Application complete
+                  </div>
+                ) : (
                 <div className="mt-3 flex flex-wrap items-center gap-2">
                   <button
                     onClick={async () => {
@@ -289,6 +323,16 @@ export default function Queue() {
                     <IconCheck className="h-4 w-4" />
                     {busy === k ? "Working…" : auto ? "Approve & auto-apply" : "Copy letter & open form"}
                   </button>
+                  {/* Aggregator listings are submitted by hand, so the user has to
+                      be the one to say the application actually went out. */}
+                  <button
+                    onClick={() => act("app", a.id, "done")}
+                    disabled={busy === k}
+                    className="btn-ghost"
+                    title="I submitted this — move it to Completed"
+                  >
+                    <IconCheck className="h-4 w-4" /> Mark applied
+                  </button>
                   <button
                     onClick={() => act("app", a.id, "discard")}
                     disabled={busy === k}
@@ -297,6 +341,7 @@ export default function Queue() {
                     <IconX className="h-4 w-4" /> Discard
                   </button>
                 </div>
+                )}
               </article>
             );
           })
@@ -314,8 +359,12 @@ export default function Queue() {
           <div className="card">
             <EmptyState
               icon={IconSend}
-              title="No emails waiting"
-              hint="Outreach drafts appear when a hiring contact is found, and freelance pitches when you pitch a lead."
+              title={view === "done" ? "Nothing sent yet" : "No emails waiting"}
+              hint={
+                view === "done"
+                  ? "Sent emails and WhatsApp messages are listed here."
+                  : "Outreach drafts appear when a hiring contact is found, and freelance pitches when you pitch a lead."
+              }
             />
           </div>
         ) : (
@@ -382,11 +431,19 @@ export default function Queue() {
                 />
                 <div className="mt-1.5 mono text-[11px] text-ink-muted">{words(body)} words</div>
 
-                <RefineBar
-                  busy={busy === k}
-                  onRefine={(instruction) => refine("email", e.id, instruction)}
-                />
+                {view === "pending" && (
+                  <RefineBar
+                    busy={busy === k}
+                    onRefine={(instruction) => refine("email", e.id, instruction)}
+                  />
+                )}
 
+                {view === "done" ? (
+                  <div className="mt-3 flex items-center gap-2 text-[13px] text-ok">
+                    <IconCheck className="h-4 w-4" />
+                    {e.channel === "whatsapp" ? "Message sent" : "Email sent"}
+                  </div>
+                ) : (
                 <div className="mt-3 flex flex-wrap items-center gap-2">
                   <button
                     onClick={() => act("email", e.id, "approve")}
@@ -400,6 +457,16 @@ export default function Queue() {
                         ? "Open WhatsApp"
                         : "Approve & send"}
                   </button>
+                  {e.channel === "whatsapp" && (
+                    <button
+                      onClick={() => act("email", e.id, "done")}
+                      disabled={busy === k}
+                      className="btn-ghost"
+                      title="I already sent this — move it to Completed"
+                    >
+                      <IconCheck className="h-4 w-4" /> Mark sent
+                    </button>
+                  )}
                   <button
                     onClick={() => act("email", e.id, "discard")}
                     disabled={busy === k}
@@ -408,6 +475,7 @@ export default function Queue() {
                     <IconX className="h-4 w-4" /> Discard
                   </button>
                 </div>
+                )}
               </article>
             );
           })

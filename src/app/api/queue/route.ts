@@ -6,18 +6,37 @@ import { refineDraft } from "@/lib/claude";
 
 export const maxDuration = 300;
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  // ?view=done lists what's already been handled, so the queue itself can show
+  // history instead of only outstanding work.
+  const done = req.nextUrl.searchParams.get("view") === "done";
+
   const apps = db
     .prepare(
       `SELECT a.*, j.title, j.company, j.url, j.apply_url, j.source
        FROM apps a JOIN jobs j ON j.id = a.job_id
-       WHERE a.status IN ('draft','failed','manual') ORDER BY a.id DESC`
+       WHERE a.status ${done ? "= 'applied'" : "IN ('draft','failed','manual')"}
+       ORDER BY a.id DESC`
     )
     .all();
   const emails = db
-    .prepare("SELECT * FROM emails WHERE status IN ('draft','failed') ORDER BY id DESC")
+    .prepare(
+      `SELECT * FROM emails WHERE status ${done ? "= 'sent'" : "IN ('draft','failed')"}
+       ORDER BY id DESC`
+    )
     .all();
-  return NextResponse.json({ apps, emails });
+
+  const counts = db
+    .prepare(
+      `SELECT
+        (SELECT COUNT(*) FROM apps WHERE status IN ('draft','failed','manual')) +
+        (SELECT COUNT(*) FROM emails WHERE status IN ('draft','failed')) AS pending,
+        (SELECT COUNT(*) FROM apps WHERE status = 'applied') +
+        (SELECT COUNT(*) FROM emails WHERE status = 'sent') AS done`
+    )
+    .get();
+
+  return NextResponse.json({ apps, emails, counts });
 }
 
 // { type: "app"|"email", id, action: "approve"|"discard", body?, subject? }
@@ -57,6 +76,25 @@ export async function POST(req: NextRequest) {
     );
     db.prepare("UPDATE emails SET body = ? WHERE id = ?").run(revised, id);
     return NextResponse.json({ ok: true, text: revised });
+  }
+
+  // "I handled this myself" — for aggregator listings we can't submit, and for
+  // anything the user actioned outside the app.
+  if (action === "done") {
+    if (type === "app") {
+      const row = db.prepare("SELECT job_id FROM apps WHERE id = ?").get(id) as
+        | { job_id: number }
+        | undefined;
+      db.prepare(
+        "UPDATE apps SET status='applied', error=NULL, applied_at=datetime('now') WHERE id=?"
+      ).run(id);
+      if (row) db.prepare("UPDATE jobs SET status='applied' WHERE id=?").run(row.job_id);
+    } else {
+      db.prepare(
+        "UPDATE emails SET status='sent', sent_at=datetime('now') WHERE id=?"
+      ).run(id);
+    }
+    return NextResponse.json({ ok: true });
   }
 
   if (action === "discard") {
