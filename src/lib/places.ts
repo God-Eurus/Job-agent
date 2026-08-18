@@ -60,8 +60,35 @@ export async function searchBusinesses(opts: {
 }
 
 // Try to find a contact email on the business's own website (public contact pages only).
+// Addresses that show up in page source but are not a human contact: SDK config,
+// analytics, image filenames, unattended mailboxes.
+const JUNK_EMAIL =
+  /(\.(png|jpe?g|gif|webp|svg|css|js)$)|gserviceaccount\.com|sentry\.|wixpress|example\.(com|org)|@(sentry|cloudflare|godaddy|squarespace|wix|shopify)/i;
+const UNATTENDED = /^(no-?reply|do-?not-?reply|postmaster|abuse|bounce|mailer-daemon)@/i;
+// A mailbox a person actually reads, in rough order of usefulness for a pitch.
+const PREFERRED = /^(hello|hi|info|contact|kontakt|post|mail|office|sales|booking|admin)@/i;
+
+export function pickContactEmail(html: string): string | null {
+  const found = html.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g) ?? [];
+  const usable = [...new Set(found.map((e) => e.toLowerCase()))].filter(
+    (e) => !JUNK_EMAIL.test(e) && !UNATTENDED.test(e) && e.length < 60
+  );
+  return usable.find((e) => PREFERRED.test(e)) ?? usable[0] ?? null;
+}
+
 export async function scrapeEmailFromSite(website: string): Promise<string | null> {
-  const candidates = [website, new URL("/contact", website).toString()];
+  let candidates = [website];
+  try {
+    candidates = [
+      website,
+      new URL("/contact", website).toString(),
+      new URL("/kontakt", website).toString(),
+      new URL("/about", website).toString(),
+    ];
+  } catch {
+    /* malformed URL — try it as given */
+  }
+
   for (const url of candidates) {
     try {
       const res = await fetch(url, {
@@ -69,14 +96,10 @@ export async function scrapeEmailFromSite(website: string): Promise<string | nul
         signal: AbortSignal.timeout(8000),
       });
       if (!res.ok) continue;
-      const html = await res.text();
-      const m = html.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g);
-      const email = m?.find(
-        (e) => !/\.(png|jpg|gif|webp|svg)$/i.test(e) && !/example\.|sentry|wixpress/i.test(e)
-      );
+      const email = pickContactEmail(await res.text());
       if (email) return email;
     } catch {
-      /* next */
+      /* next candidate */
     }
   }
   return null;

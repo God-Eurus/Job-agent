@@ -13,6 +13,7 @@ export async function GET() {
     .prepare(
       `SELECT
         (SELECT COUNT(*) FROM jobs) AS jobs,
+        (SELECT COUNT(*) FROM jobs WHERE score IS NULL) AS unscored,
         (SELECT COUNT(*) FROM jobs WHERE score >= 60) AS matched,
         (SELECT COUNT(*) FROM jobs WHERE status = 'applied') AS applied,
         (SELECT COUNT(*) FROM apps WHERE status IN ('draft','failed','manual')) +

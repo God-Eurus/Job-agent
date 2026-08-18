@@ -67,11 +67,27 @@ export async function POST(req: NextRequest) {
 
   if (type === "email") {
     const email = db.prepare("SELECT * FROM emails WHERE id = ?").get(id) as
-      | { to_email: string; subject: string; body: string }
+      | { to_email: string | null; to_phone: string | null; channel: string; subject: string; body: string }
       | undefined;
     if (!email) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+    // WhatsApp has no unattended send path — hand back a wa.me link for the
+    // client to open, and record it as sent once the user confirms.
+    if (email.channel === "whatsapp") {
+      const finalBody = body ?? email.body;
+      db.prepare(
+        "UPDATE emails SET status='sent', body=?, sent_at=datetime('now') WHERE id=?"
+      ).run(finalBody, id);
+      return NextResponse.json({
+        ok: true,
+        channel: "whatsapp",
+        waUrl: `https://wa.me/${email.to_phone}?text=${encodeURIComponent(finalBody)}`,
+      });
+    }
     const finalSubject = subject ?? email.subject;
     const finalBody = body ?? email.body;
+    if (!email.to_email)
+      return NextResponse.json({ error: "No recipient address" }, { status: 400 });
     try {
       await sendEmail({ to: email.to_email, subject: finalSubject, body: finalBody });
       db.prepare(

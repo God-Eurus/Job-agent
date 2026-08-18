@@ -168,25 +168,196 @@ export async function fetchLever(slug: string): Promise<RawJob[]> {
   });
 }
 
+export async function fetchAshby(slug: string): Promise<RawJob[]> {
+  const data = (await getJSON(
+    `https://api.ashbyhq.com/posting-api/job-board/${slug}?includeCompensation=true`
+  )) as { jobs?: Array<Record<string, unknown>> };
+  return (data.jobs ?? []).map((j) => ({
+    source: "ashby",
+    external_id: `ashby-${slug}-${j.id}`,
+    title: String(j.title),
+    company: String(j.companyName ?? slug),
+    location: (j.location as string) ?? null,
+    remote: Boolean(j.isRemote),
+    salary:
+      (j.compensation as Record<string, unknown> | undefined)?.compensationTierSummary
+        ? String((j.compensation as Record<string, unknown>).compensationTierSummary)
+        : null,
+    url: String(j.jobUrl ?? j.applyUrl),
+    apply_url: (j.applyUrl as string) ?? null,
+    description: (j.descriptionPlain as string) ?? (j.descriptionHtml as string) ?? null,
+    posted_at: (j.publishedAt as string) ?? null,
+  }));
+}
+
+export async function fetchSmartRecruiters(slug: string): Promise<RawJob[]> {
+  const data = (await getJSON(
+    `https://api.smartrecruiters.com/v1/companies/${slug}/postings?limit=100`
+  )) as { content?: Array<Record<string, unknown>> };
+  return (data.content ?? []).map((j) => {
+    const loc = (j.location as Record<string, unknown>) ?? {};
+    const city = [loc.city, loc.country].filter(Boolean).join(", ");
+    return {
+      source: "smartrecruiters",
+      external_id: `sr-${slug}-${j.id}`,
+      title: String(j.name),
+      company: String((j.company as Record<string, unknown>)?.name ?? slug),
+      location: city || null,
+      remote: Boolean(loc.remote),
+      salary: null,
+      url: `https://jobs.smartrecruiters.com/${slug}/${j.id}`,
+      apply_url: `https://jobs.smartrecruiters.com/${slug}/${j.id}`,
+      description: null,
+      posted_at: (j.releasedDate as string) ?? null,
+    };
+  });
+}
+
+export async function fetchJobicy(keywords: string[]): Promise<RawJob[]> {
+  const data = (await getJSON("https://jobicy.com/api/v2/remote-jobs?count=50")) as {
+    jobs?: Array<Record<string, unknown>>;
+  };
+  return (data.jobs ?? [])
+    .filter((j) =>
+      matchesKeywords(
+        `${j.jobTitle} ${(j.jobIndustry as string[])?.join(" ") ?? ""} ${String(j.jobExcerpt ?? "")}`,
+        keywords
+      )
+    )
+    .map((j) => ({
+      source: "jobicy",
+      external_id: `jobicy-${j.id}`,
+      title: String(j.jobTitle),
+      company: String(j.companyName),
+      location: (j.jobGeo as string) || "Remote",
+      remote: true,
+      salary:
+        j.annualSalaryMin && j.annualSalaryMax
+          ? `${j.salaryCurrency ?? ""}${j.annualSalaryMin}–${j.annualSalaryMax}`
+          : null,
+      url: String(j.url),
+      apply_url: String(j.url),
+      description: (j.jobDescription as string) ?? (j.jobExcerpt as string) ?? null,
+      posted_at: (j.pubDate as string) ?? null,
+    }));
+}
+
+// Himalayas caps each response at 20 regardless of `limit`, so page through it.
+export async function fetchHimalayas(keywords: string[], pages = 5): Promise<RawJob[]> {
+  const batches = await Promise.allSettled(
+    Array.from({ length: pages }, (_, i) =>
+      getJSON(`https://himalayas.app/jobs/api?limit=20&offset=${i * 20}`) as Promise<{
+        jobs?: Array<Record<string, unknown>>;
+      }>
+    )
+  );
+  const rows: Array<Record<string, unknown>> = [];
+  for (const b of batches) if (b.status === "fulfilled") rows.push(...(b.value.jobs ?? []));
+
+  return rows
+    .filter((j) =>
+      matchesKeywords(
+        `${j.title} ${(j.categories as string[])?.join(" ") ?? ""} ${String(j.excerpt ?? "").slice(0, 1500)}`,
+        keywords
+      )
+    )
+    .map((j) => ({
+      source: "himalayas",
+      external_id: `himalayas-${j.guid ?? j.slug ?? j.applicationLink}`,
+      title: String(j.title),
+      company: String(j.companyName ?? "Unknown"),
+      location: (j.locationRestrictions as string[])?.join(", ") || "Remote",
+      remote: true,
+      salary:
+        j.minSalary && j.maxSalary ? `$${j.minSalary}–$${j.maxSalary}` : null,
+      url: String(j.applicationLink ?? j.url ?? ""),
+      apply_url: (j.applicationLink as string) ?? null,
+      description: (j.description as string) ?? (j.excerpt as string) ?? null,
+      posted_at: j.pubDate ? new Date(Number(j.pubDate) * 1000).toISOString() : null,
+    }))
+    .filter((j) => j.url);
+}
+
+// We Work Remotely publishes RSS only — parse the feed rather than scrape HTML.
+export async function fetchWeWorkRemotely(keywords: string[]): Promise<RawJob[]> {
+  const res = await fetch("https://weworkremotely.com/remote-jobs.rss", { headers: UA });
+  if (!res.ok) throw new Error(`wwr -> ${res.status}`);
+  const xml = await res.text();
+
+  const pick = (block: string, tag: string) => {
+    const m = block.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`, "i"));
+    return m ? m[1].replace(/<!\[CDATA\[|\]\]>/g, "").trim() : "";
+  };
+
+  return (xml.match(/<item>[\s\S]*?<\/item>/g) ?? [])
+    .map((item) => {
+      const title = pick(item, "title");
+      const [company, ...rest] = title.split(":");
+      return {
+        source: "weworkremotely",
+        external_id: `wwr-${pick(item, "guid") || pick(item, "link")}`,
+        title: (rest.join(":") || title).trim(),
+        company: (rest.length ? company : "Unknown").trim(),
+        location: pick(item, "region") || "Remote",
+        remote: true,
+        salary: null,
+        url: pick(item, "link"),
+        apply_url: pick(item, "link"),
+        description: pick(item, "description") || null,
+        posted_at: pick(item, "pubDate") || null,
+      };
+    })
+    .filter((j) => j.url && matchesKeywords(`${j.title} ${j.description ?? ""}`, keywords));
+}
+
+// Company boards return every opening — sales, legal, warehouse. Scoring all of
+// them with an LLM is the expensive mistake, so gate on role/keyword relevance
+// before anything reaches the database.
+function relevant(job: RawJob, keywords: string[], roles: string[]): boolean {
+  const terms = [...keywords, ...roles];
+  if (terms.length === 0) return true;
+  const hay = `${job.title} ${job.description?.slice(0, 1200) ?? ""}`.toLowerCase();
+
+  // The title carries the signal; a description mention alone is too loose for
+  // a board dump (every posting lists "collaborate with engineering").
+  const title = job.title.toLowerCase();
+  if (terms.some((t) => title.includes(t.toLowerCase()))) return true;
+
+  const ENGINEERING =
+    /\b(engineer|developer|programmer|software|frontend|front-end|backend|back-end|full.?stack|web dev|sde)\b/;
+  return ENGINEERING.test(title) && terms.some((t) => hay.includes(t.toLowerCase()));
+}
+
 export async function huntAll(opts: {
   keywords: string[];
+  roles?: string[];
   ghCompanies: string[];
   leverCompanies: string[];
+  ashbyCompanies?: string[];
+  smartRecruitersCompanies?: string[];
+  webJobs?: RawJob[];
 }): Promise<{ fetched: number; inserted: number; errors: string[] }> {
   const errors: string[] = [];
   const batches = await Promise.allSettled([
     fetchRemoteOK(opts.keywords),
     fetchRemotive(opts.keywords),
     fetchArbeitnow(opts.keywords),
+    fetchJobicy(opts.keywords),
+    fetchHimalayas(opts.keywords),
+    fetchWeWorkRemotely(opts.keywords),
     ...opts.ghCompanies.map((s) => fetchGreenhouse(s)),
     ...opts.leverCompanies.map((s) => fetchLever(s)),
+    ...(opts.ashbyCompanies ?? []).map((s) => fetchAshby(s)),
+    ...(opts.smartRecruitersCompanies ?? []).map((s) => fetchSmartRecruiters(s)),
+    Promise.resolve(opts.webJobs ?? []),
   ]);
 
-  const jobs: RawJob[] = [];
+  const all: RawJob[] = [];
   for (const b of batches) {
-    if (b.status === "fulfilled") jobs.push(...b.value);
+    if (b.status === "fulfilled") all.push(...b.value);
     else errors.push(String(b.reason).slice(0, 200));
   }
+  const jobs = all.filter((j) => relevant(j, opts.keywords, opts.roles ?? []));
 
   const insert = db.prepare(`
     INSERT OR IGNORE INTO jobs
@@ -201,5 +372,5 @@ export async function huntAll(opts: {
     }
   });
   tx(jobs);
-  return { fetched: jobs.length, inserted, errors };
+  return { fetched: all.length, inserted, errors };
 }

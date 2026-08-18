@@ -148,6 +148,28 @@ export async function draftOutreachEmail(
   return res.parsed_output as EmailDraft;
 }
 
+// WhatsApp is a different register from email: shorter, no subject line, and
+// it lands in a personal inbox — so it has to earn the interruption fast.
+export async function draftWhatsAppPitch(
+  resume: Resume,
+  lead: { name: string; category: string | null; region: string | null; website: string | null }
+): Promise<string> {
+  const res = await client.messages.create({
+    model: DRAFT_MODEL,
+    max_tokens: 600,
+    system:
+      "You write short WhatsApp messages introducing a freelance web developer to a local business owner. Under 60 words, plain language, no jargon, no emoji spam (at most one). Structure: who you are in half a sentence, one specific observation about their web presence, what you could build, and a low-friction question. Never invent facts about the business. End with: 'Reply STOP and I won't message again.' Return only the message text.",
+    messages: [
+      {
+        role: "user",
+        content: `Sender: ${resume.name}, freelance website & e-commerce store builder. Portfolio: ${resume.links.join(", ")}\n\nBusiness: ${lead.name} (${lead.category ?? "local business"}) in ${lead.region ?? "their area"}. Website: ${lead.website ?? "NONE — no website found"}.`,
+      },
+    ],
+  });
+  const block = res.content.find((b) => b.type === "text");
+  return block?.type === "text" ? block.text.trim() : "";
+}
+
 export async function draftBizdevPitch(
   resume: Resume,
   lead: { name: string; category: string | null; region: string | null; website: string | null }

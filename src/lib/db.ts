@@ -52,7 +52,7 @@ CREATE TABLE IF NOT EXISTS emails (
   kind TEXT NOT NULL,               -- 'outreach' | 'bizdev'
   job_id INTEGER REFERENCES jobs(id),
   lead_id INTEGER,
-  to_email TEXT NOT NULL,
+  to_email TEXT,
   to_name TEXT,
   company TEXT,
   subject TEXT NOT NULL,
@@ -83,6 +83,57 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT
 );
 `);
+
+// Migration: outreach can go out over WhatsApp when a lead has a phone but no
+// public email. Older databases predate these columns.
+// Build workers import this module concurrently, so a check-then-ALTER can
+// race; swallowing "duplicate column" is the simplest correct guard.
+function addColumn(sql: string) {
+  try {
+    db.exec(sql);
+  } catch (e) {
+    if (!/duplicate column/i.test(String(e))) throw e;
+  }
+}
+addColumn("ALTER TABLE emails ADD COLUMN channel TEXT NOT NULL DEFAULT 'email'");
+addColumn("ALTER TABLE emails ADD COLUMN to_phone TEXT");
+
+// WhatsApp drafts have no address, but older databases declared to_email NOT
+// NULL. SQLite can't drop a constraint in place, so rebuild the table once.
+const toEmailRequired = (
+  db.prepare("PRAGMA table_info(emails)").all() as Array<{ name: string; notnull: number }>
+).some((c) => c.name === "to_email" && c.notnull === 1);
+
+if (toEmailRequired) {
+  db.exec(`
+    BEGIN;
+    CREATE TABLE emails_rebuilt (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      kind TEXT NOT NULL,
+      job_id INTEGER REFERENCES jobs(id),
+      lead_id INTEGER,
+      to_email TEXT,
+      to_name TEXT,
+      company TEXT,
+      subject TEXT NOT NULL,
+      body TEXT NOT NULL,
+      status TEXT DEFAULT 'draft',
+      error TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      sent_at TEXT,
+      channel TEXT NOT NULL DEFAULT 'email',
+      to_phone TEXT
+    );
+    INSERT INTO emails_rebuilt
+      (id, kind, job_id, lead_id, to_email, to_name, company, subject, body,
+       status, error, created_at, sent_at, channel, to_phone)
+      SELECT id, kind, job_id, lead_id, to_email, to_name, company, subject, body,
+             status, error, created_at, sent_at, channel, to_phone FROM emails;
+    DROP TABLE emails;
+    ALTER TABLE emails_rebuilt RENAME TO emails;
+    COMMIT;
+  `);
+}
 
 export default db;
 

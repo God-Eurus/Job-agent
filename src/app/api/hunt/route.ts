@@ -1,6 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import db, { getProfile } from "@/lib/db";
 import { huntAll } from "@/lib/sources";
+import { searchWebJobs, firecrawlReady } from "@/lib/firecrawl";
+import {
+  DEFAULT_GREENHOUSE,
+  DEFAULT_LEVER,
+  DEFAULT_ASHBY,
+  DEFAULT_SMARTRECRUITERS,
+  withDefaults,
+} from "@/lib/boards";
 import { scoreJob } from "@/lib/claude";
 
 export const maxDuration = 300;
@@ -25,17 +33,45 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json().catch(() => ({}));
   const rescore = Boolean(body?.rescore);
+  // scoreOnly works through the backlog without hitting any source APIs.
+  const scoreOnly = Boolean(body?.scoreOnly);
+  const limitOverride = Number(body?.limit) || 0;
 
-  const hunt = rescore
+  // Open-web pass first (best effort) so its results are deduped alongside the
+  // board results in the same insert.
+  let web: { jobs: Awaited<ReturnType<typeof searchWebJobs>>["jobs"]; errors: string[] } = {
+    jobs: [],
+    errors: [],
+  };
+  if (!rescore && !scoreOnly && firecrawlReady()) {
+    try {
+      web = await searchWebJobs({
+        roles: prefs.roles?.length ? prefs.roles : prefs.keywords,
+        locations: prefs.locations ?? [],
+        remoteOnly: Boolean(prefs.remoteOnly),
+      });
+    } catch (e) {
+      web = { jobs: [], errors: [String(e).slice(0, 160)] };
+    }
+  }
+
+  const hunt = rescore || scoreOnly
     ? { fetched: 0, inserted: 0, errors: [] as string[] }
     : await huntAll({
         keywords: prefs.keywords?.length ? prefs.keywords : prefs.roles,
-        ghCompanies: prefs.ghCompanies ?? [],
-        leverCompanies: prefs.leverCompanies ?? [],
+        roles: prefs.roles ?? [],
+        // Built-in company boards mean "company websites" are covered without
+        // the user configuring anything; their own slugs are merged in.
+        ghCompanies: withDefaults(prefs.ghCompanies, DEFAULT_GREENHOUSE),
+        leverCompanies: withDefaults(prefs.leverCompanies, DEFAULT_LEVER),
+        ashbyCompanies: DEFAULT_ASHBY,
+        smartRecruitersCompanies: DEFAULT_SMARTRECRUITERS,
+        webJobs: web.jobs,
       });
 
   // Cap per run to bound cost.
-  const scoreLimit = Number(process.env.SCORE_LIMIT_PER_HUNT ?? 60);
+  const scoreLimit =
+    limitOverride || Number(process.env.SCORE_LIMIT_PER_HUNT ?? 60);
 
   // On rescore, leave anything already actioned (queued/applied) alone — the
   // user has invested in those and a new score shouldn't silently skip them.
@@ -49,21 +85,37 @@ export async function POST(req: NextRequest) {
       : db.prepare("SELECT * FROM jobs WHERE score IS NULL ORDER BY id DESC LIMIT ?").all(scoreLimit)
   ) as Scorable[];
 
+  // Scoring is one small model call per job; sequential runs took minutes for a
+  // few hundred. Bounded concurrency keeps it fast without tripping rate limits.
+  const CONCURRENCY = Number(process.env.SCORE_CONCURRENCY ?? 8);
+  const update = db.prepare(
+    `UPDATE jobs SET score = ?, score_reason = ?,
+     status = CASE WHEN ? >= 60 THEN 'matched' ELSE 'skipped' END WHERE id = ?`
+  );
+
   let scored = 0;
   let matched = 0;
-  for (const job of targets) {
-    try {
-      const s = await scoreJob(resume, prefs, job);
-      db.prepare(
-        `UPDATE jobs SET score = ?, score_reason = ?,
-         status = CASE WHEN ? >= 60 THEN 'matched' ELSE 'skipped' END WHERE id = ?`
-      ).run(s.score, s.reason, s.score, job.id);
-      scored++;
-      if (s.score >= 60) matched++;
-    } catch (e) {
-      console.error(`score failed for job ${job.id}:`, e);
+  let cursor = 0;
+  // Bind the narrowed values — TS widens them back to nullable inside a closure.
+  const profile = resume;
+  const criteria = prefs;
+
+  async function worker() {
+    while (cursor < targets.length) {
+      const job = targets[cursor++];
+      try {
+        const s = await scoreJob(profile, criteria, job);
+        update.run(s.score, s.reason, s.score, job.id);
+        scored++;
+        if (s.score >= 60) matched++;
+      } catch (e) {
+        console.error(`score failed for job ${job.id}:`, e);
+      }
     }
   }
+  await Promise.all(
+    Array.from({ length: Math.min(CONCURRENCY, targets.length) }, () => worker())
+  );
 
   const pending = db
     .prepare("SELECT COUNT(*) AS n FROM jobs WHERE score IS NULL")
@@ -71,9 +123,12 @@ export async function POST(req: NextRequest) {
 
   return NextResponse.json({
     ...hunt,
+    errors: [...hunt.errors, ...web.errors].slice(0, 10),
     rescore,
     scored,
     matched,
+    webFound: web.jobs.length,
+    webEnabled: firecrawlReady(),
     unscoredRemaining: pending.n,
   });
 }

@@ -82,7 +82,9 @@ type AppDraft = {
 type EmailDraft = {
   id: number;
   kind: string;
-  to_email: string;
+  channel?: string;
+  to_email: string | null;
+  to_phone: string | null;
   to_name: string | null;
   company: string | null;
   subject: string;
@@ -159,7 +161,11 @@ export default function Queue() {
       const d = await res.json();
       if (action === "discard") toast("info", "Discarded");
       else if (!res.ok) toast(d.manual ? "info" : "error", d.error ?? d.detail ?? "Failed");
-      else toast("ok", type === "email" ? "Email sent" : (d.detail ?? "Applied"));
+      else if (d.channel === "whatsapp") {
+        // No unattended WhatsApp send exists — open the chat prefilled instead.
+        window.open(d.waUrl, "_blank", "noopener");
+        toast("ok", "WhatsApp opened with the message ready — press send there");
+      } else toast("ok", type === "email" ? "Email sent" : (d.detail ?? "Applied"));
       await load();
     } catch (e) {
       toast("error", String(e));
@@ -321,19 +327,25 @@ export default function Queue() {
                 <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
                   <div className="min-w-0">
                     <h3 className="text-sm font-medium">
-                      To {e.to_name ?? e.to_email}
-                      <span className="ml-2 text-xs font-normal text-ink-muted">{e.to_email}</span>
+                      To {e.to_name ?? e.company ?? e.to_email ?? e.to_phone}
+                      <span className="ml-2 text-xs font-normal text-ink-muted">
+                        {e.channel === "whatsapp" ? `+${e.to_phone}` : e.to_email}
+                      </span>
                     </h3>
-                    {e.company && <div className="text-xs text-ink-muted">{e.company}</div>}
+                    {e.company && e.to_name && (
+                      <div className="text-xs text-ink-muted">{e.company}</div>
+                    )}
                   </div>
                   <span
-                    className={`mono px-2 py-0.5 text-[11px] ring-1 ${
-                      e.kind === "bizdev"
-                        ? "border border-warn/40 text-warn"
-                        : "border border-ok/40 text-ok"
+                    className={`mono px-2 py-0.5 text-[11px] ${
+                      e.channel === "whatsapp"
+                        ? "border border-ok/40 text-ok"
+                        : e.kind === "bizdev"
+                          ? "border border-warn/40 text-warn"
+                          : "border border-line-strong text-ink-muted"
                     }`}
                   >
-                    {e.kind}
+                    {e.channel === "whatsapp" ? "whatsapp" : e.kind}
                   </span>
                 </div>
 
@@ -344,15 +356,20 @@ export default function Queue() {
                   </p>
                 )}
 
-                <label className="sr-only" htmlFor={`subj-${e.id}`}>Subject</label>
-                <input
-                  id={`subj-${e.id}`}
-                  className="input mb-2 font-medium"
-                  defaultValue={e.subject}
-                  onChange={(ev) =>
-                    setEdits({ ...edits, [k]: { ...edits[k], subject: ev.target.value } })
-                  }
-                />
+                {/* WhatsApp messages have no subject line */}
+                {e.channel !== "whatsapp" && (
+                  <>
+                    <label className="sr-only" htmlFor={`subj-${e.id}`}>Subject</label>
+                    <input
+                      id={`subj-${e.id}`}
+                      className="input mb-2 font-medium"
+                      defaultValue={e.subject}
+                      onChange={(ev) =>
+                        setEdits({ ...edits, [k]: { ...edits[k], subject: ev.target.value } })
+                      }
+                    />
+                  </>
+                )}
                 <label className="sr-only" htmlFor={`body-${e.id}`}>Email body</label>
                 <textarea
                   key={`body-${e.id}-${rev}`}
@@ -377,7 +394,11 @@ export default function Queue() {
                     className="btn-primary"
                   >
                     <IconSend className="h-4 w-4" />
-                    {busy === k ? "Sending…" : "Approve & send"}
+                    {busy === k
+                      ? "Sending…"
+                      : e.channel === "whatsapp"
+                        ? "Open WhatsApp"
+                        : "Approve & send"}
                   </button>
                   <button
                     onClick={() => act("email", e.id, "discard")}

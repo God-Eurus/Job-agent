@@ -48,7 +48,15 @@ export default function Jobs() {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [cursor, setCursor] = useState(0);
   const [openId, setOpenId] = useState<number | null>(null);
+  const [pending, setPending] = useState(0);
   const searchRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    fetch("/api/status")
+      .then((r) => r.json())
+      .then((d) => setPending(d.counts?.unscored ?? 0))
+      .catch(() => {});
+  }, []);
 
   const load = useCallback(
     () =>
@@ -93,17 +101,27 @@ export default function Jobs() {
     };
   }, [jobs]);
 
-  async function hunt(rescore = false) {
+  async function hunt(mode: "fetch" | "rescore" | "backlog" = "fetch") {
+    const rescore = mode === "rescore";
     setHunting(true);
     try {
       const res = await fetch("/api/hunt", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rescore }),
+        body: JSON.stringify(
+          mode === "backlog" ? { scoreOnly: true, limit: 300 } : { rescore }
+        ),
       });
       const d = await res.json();
       if (!res.ok) {
         toast("error", d.error ?? "Hunt failed");
+      } else if (mode === "backlog") {
+        toast(
+          "ok",
+          `Scored ${d.scored} · ${d.matched} match` +
+            (d.unscoredRemaining ? ` · ${d.unscoredRemaining} still pending` : " · backlog clear")
+        );
+        setPending(d.unscoredRemaining ?? 0);
       } else if (rescore) {
         toast("ok", `Re-scored ${d.scored} jobs · ${d.matched} now match`);
       } else if (d.inserted === 0) {
@@ -120,6 +138,7 @@ export default function Jobs() {
             (d.unscoredRemaining ? ` · ${d.unscoredRemaining} left to score` : "")
         );
       }
+      if (typeof d.unscoredRemaining === "number") setPending(d.unscoredRemaining);
       await load();
     } catch (e) {
       toast("error", String(e));
@@ -206,9 +225,19 @@ export default function Jobs() {
             prep · <kbd className="mono text-ink">/</kbd> search
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          {pending > 0 && (
+            <button
+              onClick={() => hunt("backlog")}
+              disabled={hunting}
+              className="btn-ghost"
+              title={`Score up to 300 of the ${pending} unscored jobs (~$${(Math.min(pending, 300) * 0.002).toFixed(2)} in Haiku tokens)`}
+            >
+              Score {pending} pending
+            </button>
+          )}
           <button
-            onClick={() => hunt(true)}
+            onClick={() => hunt("rescore")}
             disabled={hunting}
             className="btn-ghost"
             title="Re-score existing jobs against your current preferences. Use after editing your profile."
