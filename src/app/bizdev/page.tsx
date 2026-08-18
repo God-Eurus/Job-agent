@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { IconSearch, IconZap, IconExternal, IconStore, IconGlobe } from "@/components/icons";
 import { EmptyState, SkeletonRows, StatusBadge, useToast } from "@/components/ui";
 
@@ -26,16 +26,25 @@ export default function Bizdev() {
   const [searching, setSearching] = useState(false);
   const [pitching, setPitching] = useState<number | null>(null);
   const [onlyWeak, setOnlyWeak] = useState(true);
+  const [regions, setRegions] = useState<Array<{ region: string; n: number }>>([]);
+  const [active, setActive] = useState<string | null>(null);
 
-  const load = () =>
-    fetch("/api/bizdev")
-      .then((r) => r.json())
-      .then((d) => setLeads(d.leads ?? []))
-      .catch(() => setLeads([]));
+  const load = useCallback(
+    (forRegion?: string | null) =>
+      fetch(`/api/bizdev${forRegion ? `?region=${encodeURIComponent(forRegion)}` : ""}`)
+        .then((r) => r.json())
+        .then((d) => {
+          setLeads(d.leads ?? []);
+          setRegions(d.regions ?? []);
+          setActive(d.active ?? null);
+        })
+        .catch(() => setLeads([])),
+    []
+  );
 
   useEffect(() => {
     load();
-  }, []);
+  }, [load]);
 
   async function search() {
     if (!region.trim() || !category.trim()) {
@@ -52,7 +61,8 @@ export default function Bizdev() {
       const d = await res.json();
       if (!res.ok) toast("error", d.error ?? "Search failed");
       else toast("ok", `${d.inserted} new lead${d.inserted === 1 ? "" : "s"} from ${d.found} found`);
-      await load();
+      // Jump the list to what was just searched rather than leaving the old city up.
+      await load(region);
     } catch (e) {
       toast("error", String(e));
     } finally {
@@ -69,9 +79,11 @@ export default function Bizdev() {
         body: JSON.stringify({ action: "pitch", leadId: lead.id }),
       });
       const d = await res.json();
-      if (!res.ok) toast(d.phoneOnly ? "info" : "error", d.error ?? "Pitch failed");
+      if (!res.ok) toast("error", d.error ?? "Pitch failed");
+      else if (d.channel === "whatsapp")
+        toast("ok", `WhatsApp pitch drafted for +${d.phone} — review it in the queue`);
       else toast("ok", `Pitch drafted to ${d.email} — review it in the queue`);
-      await load();
+      await load(active);
     } catch (e) {
       toast("error", String(e));
     } finally {
@@ -146,13 +158,29 @@ export default function Bizdev() {
         </div>
       </div>
 
+      {regions.length > 1 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="label">Searched</span>
+          {regions.map((r) => (
+            <button
+              key={r.region}
+              onClick={() => load(r.region)}
+              data-active={active === r.region}
+              className="chip"
+            >
+              {r.region} <span className="mono opacity-60">{r.n}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
       {(leads?.length ?? 0) > 0 && (
         <div className="flex flex-wrap items-center gap-2">
           <button onClick={() => setOnlyWeak(true)} data-active={onlyWeak} className="chip">
-            No / weak website <span className="mono text-[11px] opacity-70">{weakCount}</span>
+            No / weak website <span className="mono opacity-60">{weakCount}</span>
           </button>
           <button onClick={() => setOnlyWeak(false)} data-active={!onlyWeak} className="chip">
-            All leads <span className="mono text-[11px] opacity-70">{leads?.length ?? 0}</span>
+            All in {active ?? "region"} <span className="mono opacity-60">{leads?.length ?? 0}</span>
           </button>
         </div>
       )}

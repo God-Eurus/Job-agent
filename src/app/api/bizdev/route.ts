@@ -26,9 +26,30 @@ function normalisePhone(raw: string | null, region: string | null): string | nul
   return digits.startsWith(code) ? digits : code + digits.replace(/^0+/, "");
 }
 
-export async function GET() {
-  const leads = db.prepare("SELECT * FROM leads ORDER BY id DESC LIMIT 200").all();
-  return NextResponse.json({ leads });
+// Leads accumulate across searches, so scope the list to one region rather than
+// returning everything — otherwise a new city's results sit under old ones (and
+// eventually fall past the row cap).
+export async function GET(req: NextRequest) {
+  const region = req.nextUrl.searchParams.get("region");
+
+  const regions = db
+    .prepare(
+      `SELECT region, COUNT(*) AS n, MAX(id) AS recent
+       FROM leads WHERE region IS NOT NULL
+       GROUP BY region ORDER BY recent DESC`
+    )
+    .all() as Array<{ region: string; n: number }>;
+
+  // Default to the most recently searched region.
+  const active = region ?? regions[0]?.region ?? null;
+
+  const leads = active
+    ? db
+        .prepare("SELECT * FROM leads WHERE region = ? ORDER BY id DESC LIMIT 300")
+        .all(active)
+    : [];
+
+  return NextResponse.json({ leads, regions, active });
 }
 
 // { action: "search", region, category } — find businesses in a region
