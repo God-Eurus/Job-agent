@@ -63,6 +63,27 @@ export async function searchBusinesses(opts: {
 }
 
 // Try to find a contact email on the business's own website (public contact pages only).
+/**
+ * Authoritative international phone for a place ("+47 22 20 34 96").
+ * Guessing a country code from the searched region breaks as soon as leads span
+ * countries, so ask Google instead — we already store the place_id.
+ */
+export async function fetchPlacePhone(placeId: string): Promise<string | null> {
+  const key = process.env.GOOGLE_PLACES_API_KEY;
+  if (!key) throw new Error("GOOGLE_PLACES_API_KEY not set");
+
+  const res = await fetch(`https://places.googleapis.com/v1/places/${placeId}`, {
+    headers: {
+      "X-Goog-Api-Key": key,
+      "X-Goog-FieldMask": "internationalPhoneNumber",
+    },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!res.ok) return null;
+  const data = (await res.json()) as { internationalPhoneNumber?: string };
+  return data.internationalPhoneNumber ?? null;
+}
+
 // Addresses that show up in page source but are not a human contact: SDK config,
 // analytics, image filenames, unattended mailboxes.
 const JUNK_EMAIL =

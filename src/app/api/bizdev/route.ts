@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import db, { getProfile } from "@/lib/db";
-import { searchBusinesses, scrapeEmailFromSite } from "@/lib/places";
+import { searchBusinesses, scrapeEmailFromSite, fetchPlacePhone } from "@/lib/places";
 import { draftBizdevPitch, draftWhatsAppPitch } from "@/lib/claude";
 import { findViaHunter } from "@/lib/contacts";
 
@@ -8,10 +8,28 @@ export const maxDuration = 300;
 
 // wa.me needs digits only, including country code. Places returns national
 // format for local results, so infer the code from the searched region.
+// Countries and a few major cities, since regions are often typed as just a city.
 const COUNTRY_CODES: Record<string, string> = {
-  india: "91", "united states": "1", usa: "1", uk: "44", "united kingdom": "44",
-  uae: "971", "united arab emirates": "971", canada: "1", australia: "61",
-  germany: "49", singapore: "65",
+  india: "91", bengaluru: "91", mumbai: "91", delhi: "91", jaipur: "91",
+  hyderabad: "91", chennai: "91", pune: "91", kolkata: "91", ahmedabad: "91",
+  "united states": "1", usa: "1", canada: "1", toronto: "1", "new york": "1",
+  uk: "44", "united kingdom": "44", london: "44", manchester: "44",
+  uae: "971", "united arab emirates": "971", dubai: "971", "abu dhabi": "971",
+  sharjah: "971", qatar: "974", doha: "974", "saudi arabia": "966", riyadh: "966",
+  netherlands: "31", amsterdam: "31", rotterdam: "31", "the hague": "31",
+  norway: "47", oslo: "47", bergen: "47", sweden: "46", stockholm: "46",
+  denmark: "45", copenhagen: "45", germany: "49", berlin: "49", munich: "49",
+  france: "33", paris: "33", spain: "34", madrid: "34", barcelona: "34",
+  italy: "39", rome: "39", milan: "39", portugal: "351", lisbon: "351",
+  ireland: "353", dublin: "353", poland: "48", warsaw: "48",
+  australia: "61", sydney: "61", melbourne: "61", "new zealand": "64",
+  singapore: "65", malaysia: "60", "kuala lumpur": "60", indonesia: "62",
+  jakarta: "62", philippines: "63", manila: "63", vietnam: "84",
+  thailand: "66", bangkok: "66", japan: "81", tokyo: "81",
+  pakistan: "92", karachi: "92", lahore: "92", bangladesh: "880", dhaka: "880",
+  "sri lanka": "94", nepal: "977", "south africa": "27", nigeria: "234",
+  lagos: "234", kenya: "254", nairobi: "254", egypt: "20", cairo: "20",
+  brazil: "55", "sao paulo": "55", mexico: "52", colombia: "57", bogota: "57",
 };
 
 function normalisePhone(raw: string | null, region: string | null): string | null {
@@ -26,17 +44,16 @@ function normalisePhone(raw: string | null, region: string | null): string | nul
   // number — carrying it through produced links WhatsApp rejects outright.
   const national = digits.replace(/^0+/, "");
 
+  // Longest match wins, so "abu dhabi" beats a stray substring hit.
   const hay = (region ?? "").toLowerCase();
-  const code =
-    Object.entries(COUNTRY_CODES).find(([k]) => hay.includes(k))?.[1] ??
-    // Region often omits the country ("jaipur"), so fall back to the user's own.
-    process.env.DEFAULT_COUNTRY_CODE ??
-    null;
+  const code = Object.entries(COUNTRY_CODES)
+    .filter(([k]) => hay.includes(k))
+    .sort((a, b) => b[0].length - a[0].length)[0]?.[1];
 
   if (code) return national.startsWith(code) ? national : code + national;
 
-  // Without a country code the number can't be dialled internationally; only
-  // trust it if it already looks like one.
+  // No recognised country: a wrong code is worse than none — it produces a
+  // real but unrelated number. Only trust digits that already look international.
   return national.length >= 11 ? national : null;
 }
 
@@ -124,6 +141,7 @@ export async function POST(req: NextRequest) {
           website: string | null;
           email: string | null;
           phone: string | null;
+          place_id: string | null;
         }
       | undefined;
     if (!lead) return NextResponse.json({ error: "Lead not found" }, { status: 404 });
@@ -147,7 +165,21 @@ export async function POST(req: NextRequest) {
     }
     // No public email: fall back to WhatsApp if the listing carries a phone.
     if (!email) {
-      const phone = normalisePhone(lead.phone, lead.region);
+      // Prefer Google's international format over inferring a country code.
+      let source = lead.phone;
+      if (source && !source.trim().startsWith("+") && lead.place_id) {
+        try {
+          const intl = await fetchPlacePhone(lead.place_id);
+          if (intl) {
+            db.prepare("UPDATE leads SET phone = ? WHERE id = ?").run(intl, lead.id);
+            source = intl;
+          }
+        } catch {
+          /* fall through to inference */
+        }
+      }
+
+      const phone = normalisePhone(source, lead.region);
       if (!phone) {
         return NextResponse.json(
           { error: "No public email and no usable phone number for this lead." },
