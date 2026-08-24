@@ -18,12 +18,26 @@ function normalisePhone(raw: string | null, region: string | null): string | nul
   if (!raw) return null;
   const digits = raw.replace(/\D/g, "");
   if (digits.length < 7) return null;
+
+  // Already international (Places returns "+91 93149 18766").
   if (raw.trim().startsWith("+")) return digits;
 
+  // A leading 0 is a national trunk prefix and is never part of an E.164
+  // number — carrying it through produced links WhatsApp rejects outright.
+  const national = digits.replace(/^0+/, "");
+
   const hay = (region ?? "").toLowerCase();
-  const code = Object.entries(COUNTRY_CODES).find(([k]) => hay.includes(k))?.[1];
-  if (!code) return digits.length >= 11 ? digits : null;
-  return digits.startsWith(code) ? digits : code + digits.replace(/^0+/, "");
+  const code =
+    Object.entries(COUNTRY_CODES).find(([k]) => hay.includes(k))?.[1] ??
+    // Region often omits the country ("jaipur"), so fall back to the user's own.
+    process.env.DEFAULT_COUNTRY_CODE ??
+    null;
+
+  if (code) return national.startsWith(code) ? national : code + national;
+
+  // Without a country code the number can't be dialled internationally; only
+  // trust it if it already looks like one.
+  return national.length >= 11 ? national : null;
 }
 
 // Leads accumulate across searches, so scope the list to one region rather than

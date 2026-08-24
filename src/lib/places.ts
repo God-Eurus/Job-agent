@@ -15,7 +15,9 @@ export async function searchBusinesses(opts: {
       "Content-Type": "application/json",
       "X-Goog-Api-Key": key,
       "X-Goog-FieldMask":
-        "places.id,places.displayName,places.websiteUri,places.nationalPhoneNumber,places.rating,places.primaryTypeDisplayName",
+        // internationalPhoneNumber carries the country code, which wa.me requires;
+        // the national format ("093149 18766") is not routable.
+        "places.id,places.displayName,places.websiteUri,places.internationalPhoneNumber,places.nationalPhoneNumber,places.rating,places.primaryTypeDisplayName",
     },
     body: JSON.stringify({
       textQuery: `${opts.category} in ${opts.region}`,
@@ -28,6 +30,7 @@ export async function searchBusinesses(opts: {
       id: string;
       displayName?: { text: string };
       websiteUri?: string;
+      internationalPhoneNumber?: string;
       nationalPhoneNumber?: string;
       rating?: number;
       primaryTypeDisplayName?: { text: string };
@@ -50,7 +53,7 @@ export async function searchBusinesses(opts: {
       opts.region,
       p.primaryTypeDisplayName?.text ?? opts.category,
       site,
-      p.nationalPhoneNumber ?? null,
+      p.internationalPhoneNumber ?? p.nationalPhoneNumber ?? null,
       p.rating ?? null,
       weak ? "no-or-weak-website" : "has-website"
     );
