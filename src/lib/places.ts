@@ -1,6 +1,29 @@
 // Freelance biz-dev lead discovery via Google Places API (New).
 import db from "./db";
 
+type Place = {
+  id: string;
+  displayName?: { text: string };
+  websiteUri?: string;
+  internationalPhoneNumber?: string;
+  nationalPhoneNumber?: string;
+  rating?: number;
+  primaryTypeDisplayName?: { text: string };
+};
+
+/** Turn Google's terse auth errors into something the user can act on. */
+function placesError(status: number, body: string): Error {
+  if (status === 403)
+    return new Error(
+      "Places API denied the request (403). Check the key's API restrictions " +
+        "include “Places API (New)” — not the legacy “Places API” — that the API " +
+        "is enabled, and that billing is active on the project."
+    );
+  if (status === 429)
+    return new Error("Places API quota exceeded (429). Try again later or raise the quota.");
+  return new Error(`Places ${status}: ${body.slice(0, 200)}`);
+}
+
 export async function searchBusinesses(opts: {
   region: string;      // "Jaipur, India"
   category: string;    // "restaurants", "gyms", "boutiques"
@@ -9,35 +32,39 @@ export async function searchBusinesses(opts: {
   const key = process.env.GOOGLE_PLACES_API_KEY;
   if (!key) throw new Error("GOOGLE_PLACES_API_KEY not set");
 
-  const res = await fetch("https://places.googleapis.com/v1/places:searchText", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Goog-Api-Key": key,
-      "X-Goog-FieldMask":
-        // internationalPhoneNumber carries the country code, which wa.me requires;
-        // the national format ("093149 18766") is not routable.
-        "places.id,places.displayName,places.websiteUri,places.internationalPhoneNumber,places.nationalPhoneNumber,places.rating,places.primaryTypeDisplayName",
-    },
-    body: JSON.stringify({
-      textQuery: `${opts.category} in ${opts.region}`,
-      maxResultCount: Math.min(opts.maxResults ?? 20, 20),
-    }),
-  });
-  if (!res.ok) throw new Error(`Places ${res.status}: ${await res.text()}`);
-  const data = (await res.json()) as {
-    places?: Array<{
-      id: string;
-      displayName?: { text: string };
-      websiteUri?: string;
-      internationalPhoneNumber?: string;
-      nationalPhoneNumber?: string;
-      rating?: number;
-      primaryTypeDisplayName?: { text: string };
-    }>;
-  };
+  // Each response caps at 20 results, so repeating a search returned the same
+  // 20 places and inserted nothing new. Page through instead.
+  const target = opts.maxResults ?? 60;
+  const places: Place[] = [];
+  let pageToken: string | undefined;
 
-  const places = data.places ?? [];
+  do {
+    const res = await fetch("https://places.googleapis.com/v1/places:searchText", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": key,
+        "X-Goog-FieldMask":
+          // internationalPhoneNumber carries the country code, which wa.me requires;
+          // the national format ("093149 18766") is not routable.
+          "places.id,places.displayName,places.websiteUri,places.internationalPhoneNumber,places.nationalPhoneNumber,places.rating,places.primaryTypeDisplayName,nextPageToken",
+      },
+      body: JSON.stringify({
+        textQuery: `${opts.category} in ${opts.region}`,
+        pageSize: 20,
+        ...(pageToken ? { pageToken } : {}),
+      }),
+    });
+    if (!res.ok) {
+      // A failed later page still leaves earlier results worth keeping.
+      if (places.length === 0) throw placesError(res.status, await res.text());
+      break;
+    }
+    const data = (await res.json()) as { places?: Place[]; nextPageToken?: string };
+    places.push(...(data.places ?? []));
+    pageToken = data.nextPageToken;
+  } while (pageToken && places.length < target);
+
   const insert = db.prepare(`
     INSERT OR IGNORE INTO leads (place_id, name, region, category, website, phone, rating, notes)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -79,6 +106,9 @@ export async function fetchPlacePhone(placeId: string): Promise<string | null> {
     },
     signal: AbortSignal.timeout(10_000),
   });
+  // Surface auth problems; a plain miss is not worth failing the whole pitch.
+  if (res.status === 403 || res.status === 429)
+    throw placesError(res.status, await res.text());
   if (!res.ok) return null;
   const data = (await res.json()) as { internationalPhoneNumber?: string };
   return data.internationalPhoneNumber ?? null;
