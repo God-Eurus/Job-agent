@@ -313,7 +313,31 @@ export async function fetchWeWorkRemotely(keywords: string[]): Promise<RawJob[]>
 // Company boards return every opening — sales, legal, warehouse. Scoring all of
 // them with an LLM is the expensive mistake, so gate on role/keyword relevance
 // before anything reaches the database.
-function relevant(job: RawJob, keywords: string[], roles: string[]): boolean {
+// Roles a candidate at this experience level cannot realistically land. Ingesting
+// them cost real money to score and buried the board: 1,566 of 1,621 scored jobs
+// came back under 40, almost all "requires 7+ years" or Staff/Principal titles.
+const OUT_OF_REACH_TITLE =
+  /\b(staff|principal|distinguished|fellow|director|vp|head of|chief|architect)\b/i;
+
+function tooSenior(job: RawJob, yearsExperience: number): boolean {
+  if (OUT_OF_REACH_TITLE.test(job.title)) return true;
+
+  // "7+ years", "minimum 8 years" — allow a stretch of 3 over the candidate.
+  const demands = [...`${job.title} ${job.description?.slice(0, 2500) ?? ""}`.matchAll(
+    /(\d{1,2})\s*\+?\s*(?:-\s*\d{1,2}\s*)?years?/gi
+  )].map((m) => Number(m[1]));
+  if (demands.length === 0) return false;
+  return Math.min(...demands) > yearsExperience + 3;
+}
+
+function relevant(
+  job: RawJob,
+  keywords: string[],
+  roles: string[],
+  yearsExperience?: number
+): boolean {
+  if (yearsExperience != null && tooSenior(job, yearsExperience)) return false;
+
   const terms = [...keywords, ...roles];
   if (terms.length === 0) return true;
   const hay = `${job.title} ${job.description?.slice(0, 1200) ?? ""}`.toLowerCase();
@@ -331,11 +355,13 @@ function relevant(job: RawJob, keywords: string[], roles: string[]): boolean {
 export async function huntAll(opts: {
   keywords: string[];
   roles?: string[];
+  yearsExperience?: number;
   ghCompanies: string[];
   leverCompanies: string[];
   ashbyCompanies?: string[];
   smartRecruitersCompanies?: string[];
   webJobs?: RawJob[];
+  linkedInOpts?: { roles: string[]; locations: string[]; remoteOnly: boolean };
 }): Promise<{ fetched: number; inserted: number; errors: string[] }> {
   const errors: string[] = [];
   const batches = await Promise.allSettled([
@@ -350,6 +376,7 @@ export async function huntAll(opts: {
     ...(opts.ashbyCompanies ?? []).map((s) => fetchAshby(s)),
     ...(opts.smartRecruitersCompanies ?? []).map((s) => fetchSmartRecruiters(s)),
     Promise.resolve(opts.webJobs ?? []),
+    opts.linkedInOpts ? fetchLinkedIn(opts.linkedInOpts) : Promise.resolve([]),
   ]);
 
   const all: RawJob[] = [];
@@ -357,7 +384,9 @@ export async function huntAll(opts: {
     if (b.status === "fulfilled") all.push(...b.value);
     else errors.push(String(b.reason).slice(0, 200));
   }
-  const jobs = all.filter((j) => relevant(j, opts.keywords, opts.roles ?? []));
+  const jobs = all.filter((j) =>
+    relevant(j, opts.keywords, opts.roles ?? [], opts.yearsExperience)
+  );
 
   const insert = db.prepare(`
     INSERT OR IGNORE INTO jobs
@@ -373,4 +402,74 @@ export async function huntAll(opts: {
   });
   tx(jobs);
   return { fetched: all.length, inserted, errors };
+}
+
+/**
+ * LinkedIn's logged-out job-search fragment. No auth and no cookie, so no
+ * account is exposed — but automated access still breaches LinkedIn's User
+ * Agreement and they rate-limit by IP, so it is opt-in via ENABLE_LINKEDIN and
+ * fetched sequentially at low volume.
+ */
+export async function fetchLinkedIn(opts: {
+  roles: string[];
+  locations: string[];
+  remoteOnly: boolean;
+}): Promise<RawJob[]> {
+  if (process.env.ENABLE_LINKEDIN !== "true") return [];
+
+  const places = opts.remoteOnly
+    ? ["Remote"]
+    : (opts.locations.length ? opts.locations : ["Remote"]).slice(0, 2);
+  const roles = opts.roles.slice(0, 2);
+
+  const jobs: RawJob[] = [];
+  const seen = new Set<string>();
+
+  for (const role of roles) {
+    for (const place of places) {
+      const url =
+        "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search" +
+        `?keywords=${encodeURIComponent(role)}&location=${encodeURIComponent(place)}&start=0`;
+      try {
+        const res = await fetch(url, {
+          headers: { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)" },
+          signal: AbortSignal.timeout(20_000),
+        });
+        if (!res.ok) continue;
+        const html = await res.text();
+
+        // Each result is a <li> carrying a /jobs/view/<slug>-<id> link.
+        for (const card of html.split("<li>").slice(1)) {
+          const link = card.match(/href="(https:\/\/[a-z.]*linkedin\.com\/jobs\/view\/[^"?]+)/i)?.[1];
+          const id = link?.match(/\/jobs\/view\/(?:.*-)?(\d+)/)?.[1];
+          if (!link || !id || seen.has(id)) continue;
+
+          const strip = (s?: string) =>
+            s ? s.replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/\s+/g, " ").trim() : "";
+          const title = strip(card.match(/base-search-card__title"[^>]*>([\s\S]*?)</i)?.[1]);
+          const company = strip(card.match(/hidden-nested-link[^>]*>([\s\S]*?)<\/a>/i)?.[1]);
+          const location = strip(card.match(/job-search-card__location"[^>]*>([\s\S]*?)</i)?.[1]);
+          if (!title) continue;
+
+          seen.add(id);
+          jobs.push({
+            source: "linkedin",
+            external_id: `linkedin-${id}`,
+            title,
+            company: company || "Unknown",
+            location: location || place,
+            remote: /remote/i.test(`${title} ${location} ${place}`),
+            salary: null,
+            url: link,
+            apply_url: null, // Applying needs a session; never automate it.
+            description: null,
+            posted_at: null,
+          });
+        }
+      } catch {
+        /* skip this query */
+      }
+    }
+  }
+  return jobs;
 }

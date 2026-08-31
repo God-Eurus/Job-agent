@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import db, { getProfile } from "@/lib/db";
 import { huntAll } from "@/lib/sources";
-import { searchWebJobs, firecrawlReady } from "@/lib/firecrawl";
+import { searchWebJobs, searchIndeed, firecrawlReady } from "@/lib/firecrawl";
 import {
   DEFAULT_GREENHOUSE,
   DEFAULT_LEVER,
@@ -44,14 +44,25 @@ export async function POST(req: NextRequest) {
     errors: [],
   };
   if (!rescore && !scoreOnly && firecrawlReady()) {
+    const searchOpts = {
+      roles: prefs.roles?.length ? prefs.roles : prefs.keywords,
+      locations: prefs.locations ?? [],
+      remoteOnly: Boolean(prefs.remoteOnly),
+    };
+    // Sequential: both share one Firecrawl rate limiter, so running them in
+    // parallel would just trade results for 429s.
     try {
-      web = await searchWebJobs({
-        roles: prefs.roles?.length ? prefs.roles : prefs.keywords,
-        locations: prefs.locations ?? [],
-        remoteOnly: Boolean(prefs.remoteOnly),
-      });
+      const w = await searchWebJobs(searchOpts);
+      web = { jobs: w.jobs, errors: w.errors };
     } catch (e) {
       web = { jobs: [], errors: [String(e).slice(0, 160)] };
+    }
+    try {
+      const indeed = await searchIndeed(searchOpts);
+      web.jobs = [...web.jobs, ...indeed.jobs];
+      web.errors = [...web.errors, ...indeed.errors];
+    } catch (e) {
+      web.errors = [...web.errors, String(e).slice(0, 160)];
     }
   }
 
@@ -60,6 +71,12 @@ export async function POST(req: NextRequest) {
     : await huntAll({
         keywords: prefs.keywords?.length ? prefs.keywords : prefs.roles,
         roles: prefs.roles ?? [],
+        yearsExperience: resume.years_experience,
+        linkedInOpts: {
+          roles: prefs.roles?.length ? prefs.roles : prefs.keywords,
+          locations: prefs.locations ?? [],
+          remoteOnly: Boolean(prefs.remoteOnly),
+        },
         // Built-in company boards mean "company websites" are covered without
         // the user configuring anything; their own slugs are merged in.
         ghCompanies: withDefaults(prefs.ghCompanies, DEFAULT_GREENHOUSE),
@@ -75,11 +92,14 @@ export async function POST(req: NextRequest) {
 
   // On rescore, leave anything already actioned (queued/applied) alone — the
   // user has invested in those and a new score shouldn't silently skip them.
+  // Re-score works highest-score-first so near-threshold jobs get re-examined,
+  // rather than re-judging whichever 60 happen to be newest.
   const targets = (
     rescore
       ? db
           .prepare(
-            `SELECT * FROM jobs WHERE status IN ('matched','skipped') ORDER BY id DESC LIMIT ?`
+            `SELECT * FROM jobs WHERE status IN ('matched','skipped')
+             ORDER BY score DESC, id DESC LIMIT ?`
           )
           .all(scoreLimit)
       : db.prepare("SELECT * FROM jobs WHERE score IS NULL ORDER BY id DESC LIMIT ?").all(scoreLimit)
@@ -88,9 +108,19 @@ export async function POST(req: NextRequest) {
   // Scoring is one small model call per job; sequential runs took minutes for a
   // few hundred. Bounded concurrency keeps it fast without tripping rate limits.
   const CONCURRENCY = Number(process.env.SCORE_CONCURRENCY ?? 8);
+  // Scoring is non-deterministic near the 60 threshold, so a re-score used to
+  // erode the matched set (20 -> 14 -> 9). Re-scoring may promote a job but
+  // never silently demotes one; dismissing stays a manual Skip.
   const update = db.prepare(
-    `UPDATE jobs SET score = ?, score_reason = ?,
-     status = CASE WHEN ? >= 60 THEN 'matched' ELSE 'skipped' END WHERE id = ?`
+    rescore
+      ? `UPDATE jobs SET score = ?, score_reason = ?,
+         status = CASE
+           WHEN status = 'matched' THEN 'matched'
+           WHEN ? >= 60 THEN 'matched'
+           ELSE 'skipped' END
+         WHERE id = ?`
+      : `UPDATE jobs SET score = ?, score_reason = ?,
+         status = CASE WHEN ? >= 60 THEN 'matched' ELSE 'skipped' END WHERE id = ?`
   );
 
   let scored = 0;

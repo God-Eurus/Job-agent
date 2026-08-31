@@ -10,15 +10,17 @@ export const DEFAULT_GREENHOUSE = [
   "cloudflare", "twilio", "pinterest", "lyft", "flexport", "affirm", "brex",
   "airtable", "amplitude", "mixpanel", "vercel",
   "netlify", "elastic", "mongodb",
-  "postman", "circleci", "algolia", "contentful", "groww", "phonepe",
+  "postman", "circleci", "algolia", "contentful", "groww",
+  // India-market boards, each verified to resolve.
+  "razorpaysoftwareprivatelimited", "netradyne",
 ];
 
-export const DEFAULT_LEVER = ["spotify", "gopuff"];
+export const DEFAULT_LEVER = ["spotify", "gopuff", "fampay"];
 
 export const DEFAULT_ASHBY = [
   "openai", "ramp", "linear", "cursor", "perplexity", "runway", "replit",
   "vanta", "deel", "posthog", "clerk", "mercury", "warp", "modal", "cohere",
-  "elevenlabs", "harvey", "sierra",
+  "elevenlabs", "harvey", "sierra", "sarvam",
 ];
 
 export const DEFAULT_SMARTRECRUITERS = [
