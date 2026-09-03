@@ -2,6 +2,7 @@
 // boards we know about; this reaches postings anywhere on the web.
 // Requires FIRECRAWL_API_KEY (firecrawl.dev).
 import type { RawJob } from "./sources";
+import { extractJobsFromPage, type ExtractedJob } from "./claude";
 
 const API = "https://api.firecrawl.dev/v2";
 
@@ -46,13 +47,14 @@ async function search(query: string, limit: number): Promise<SearchHit[]> {
   return Array.isArray(d) ? d : (d?.web ?? []);
 }
 
-// Pull company + title out of an ATS URL when possible; fall back to the page title.
-function parseHit(hit: SearchHit): RawJob | null {
+// Free path: when the URL is an ATS we recognise, the company is in the URL and
+// no model call is needed. Anything else falls through to extractPage().
+function parseAtsHit(hit: SearchHit): RawJob | null {
   const url = hit.url;
   if (!url) return null;
 
   const known =
-    /greenhouse\.io|lever\.co|ashbyhq\.com|smartrecruiters\.com|workable\.com|recruitee\.com|breezy\.hr|jobvite\.com|bamboohr\.com|teamtailor\.com|personio\.|join\.com|workday/i;
+    /greenhouse\.io|lever\.co|ashbyhq\.com|smartrecruiters\.com|workable\.com|recruitee\.com|breezy\.hr|jobvite\.com|bamboohr\.com|teamtailor\.com|personio\.|join\.com/i;
   if (!known.test(url)) return null;
 
   let company = "Unknown";
@@ -85,6 +87,82 @@ function parseHit(hit: SearchHit): RawJob | null {
   };
 }
 
+/**
+ * A posting URL is only trustworthy if the scraped page actually contains it —
+ * a model asked for a link will otherwise compose a plausible one. Listing pages
+ * whose links fail this check are dropped rather than pointed at the search page.
+ */
+function verifiedUrl(
+  candidate: string,
+  pageUrl: string,
+  markdown: string,
+  isListing: boolean
+): string | null {
+  const c = candidate.trim();
+  if (!c || !/^https?:\/\//i.test(c)) return isListing ? null : pageUrl;
+  if (markdown.includes(c)) return c;
+  return isListing ? null : pageUrl;
+}
+
+function toRawJob(
+  j: ExtractedJob,
+  pageUrl: string,
+  markdown: string,
+  isListing: boolean,
+  source: string
+): RawJob | null {
+  const title = j.title?.trim();
+  if (!title) return null;
+  const url = verifiedUrl(j.url ?? "", pageUrl, markdown, isListing);
+  if (!url) return null;
+
+  return {
+    source,
+    external_id: `${source}-${url.split("?")[0]}`,
+    title,
+    company: j.company?.trim() || "Unknown",
+    location: j.location?.trim() || null,
+    remote: Boolean(j.remote),
+    salary: j.salary?.trim() || null,
+    url,
+    // Never auto-submit a form we have not verified; the queue gates this too.
+    apply_url: null,
+    description: j.summary?.trim() || null,
+    posted_at: null,
+  };
+}
+
+/** Read postings out of scraped pages, a few at a time. */
+async function extractPages(
+  pages: { url: string; markdown: string }[],
+  source: string,
+  errors: string[]
+): Promise<RawJob[]> {
+  const CONCURRENCY = Number(process.env.EXTRACT_CONCURRENCY ?? 6);
+  const out: RawJob[] = [];
+  let cursor = 0;
+
+  async function worker() {
+    while (cursor < pages.length) {
+      const page = pages[cursor++];
+      try {
+        const found = await extractJobsFromPage(page.url, page.markdown);
+        const isListing = found.length > 1;
+        for (const j of found) {
+          const raw = toRawJob(j, page.url, page.markdown, isListing, source);
+          if (raw) out.push(raw);
+        }
+      } catch (e) {
+        errors.push(`extract ${page.url.slice(0, 60)}: ${String(e).slice(0, 80)}`);
+      }
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(CONCURRENCY, pages.length) }, () => worker())
+  );
+  return out;
+}
+
 /** Search the open web for current openings matching the user's roles. */
 export async function searchWebJobs(opts: {
   roles: string[];
@@ -101,45 +179,78 @@ export async function searchWebJobs(opts: {
     : (opts.locations.length ? opts.locations : ["remote"]).slice(0, 3);
   const roles = opts.roles.slice(0, 2);
 
-  // Site-scoped queries beat generic ones: they land on real postings rather
-  // than aggregator index pages. Capped so a long location list can't multiply
-  // Firecrawl spend without bound.
-  // One query per role+place covering all three boards via OR — three separate
-  // site: queries burned the per-minute quota for no extra coverage.
-  const queries = roles
-    .flatMap((role) =>
-      places.map(
-        (where) =>
-          `(site:boards.greenhouse.io OR site:jobs.lever.co OR site:jobs.ashbyhq.com) "${role}" ${where}`
-      )
-    )
-    .slice(0, 6);
+  const pair = <T,>(fn: (role: string, place: string) => T) =>
+    roles.flatMap((role) => places.map((place) => fn(role, place)));
+
+  // Budget is requests-per-minute, so spend it where the marginal job is. The
+  // ATS-scoped query is the weakest — sources.ts already pulls those boards
+  // through their own APIs — so it gets the smallest share, and open queries
+  // (which surface company career sites, Naukri, apna, LinkedIn, Internshala…)
+  // get the largest.
+  const atsQ = pair(
+    (role, place) =>
+      `(site:boards.greenhouse.io OR site:jobs.lever.co OR site:jobs.ashbyhq.com) "${role}" ${place}`
+  ).slice(0, Number(process.env.FIRECRAWL_ATS_QUERIES ?? 2));
+
+  const openQ = pair((role, place) => `"${role}" jobs hiring ${place}`).slice(
+    0,
+    Number(process.env.FIRECRAWL_OPEN_QUERIES ?? 6)
+  );
+
+  // Big tech runs in-house portals that expose no ATS API and block plain
+  // requests, so search is the only way in. (Amazon is absent on purpose —
+  // sources.ts hits its public JSON API directly, for free.)
+  const bigTechQ = places
+    .slice(0, Number(process.env.FIRECRAWL_BIGTECH_QUERIES ?? 2))
+    .map(
+      (place) =>
+        "(site:jobs.apple.com OR site:metacareers.com OR site:careers.microsoft.com " +
+        `OR site:jobs.netflix.com OR site:google.com/about/careers) "${roles[0] ?? "software engineer"}" ${place}`
+    );
+
+  const queries = [...openQ, ...bigTechQ, ...atsQ];
 
   const errors: string[] = [];
-  const results: PromiseSettledResult<SearchHit[]>[] = [];
+  const hits: SearchHit[] = [];
   for (const q of queries) {
     try {
-      results.push({ status: "fulfilled", value: await paced(() => search(q, opts.perQuery ?? 10)) });
+      hits.push(...(await paced(() => search(q, opts.perQuery ?? 10))));
     } catch (e) {
-      results.push({ status: "rejected", reason: e });
+      errors.push(String(e).slice(0, 160));
     }
   }
 
-  const seen = new Set<string>();
+  const seenUrl = new Set<string>();
   const jobs: RawJob[] = [];
-  for (const r of results) {
-    if (r.status !== "fulfilled") {
-      errors.push(String(r.reason).slice(0, 160));
+  const toExtract: { url: string; markdown: string }[] = [];
+
+  for (const hit of hits) {
+    const url = hit.url;
+    if (!url || seenUrl.has(url)) continue;
+    seenUrl.add(url);
+
+    const ats = parseAtsHit(hit);
+    if (ats) {
+      jobs.push(ats);
       continue;
     }
-    for (const hit of r.value) {
-      const job = parseHit(hit);
-      if (!job || seen.has(job.external_id)) continue;
-      seen.add(job.external_id);
-      jobs.push(job);
-    }
+    // Too short to be a real posting or listing — usually a redirect or a wall.
+    const md = hit.markdown ?? "";
+    if (md.length < 400) continue;
+    toExtract.push({ url, markdown: md });
   }
-  return { jobs, queries, errors };
+
+  const MAX_EXTRACT = Number(process.env.MAX_EXTRACT_PAGES ?? 30);
+  jobs.push(...(await extractPages(toExtract.slice(0, MAX_EXTRACT), "web", errors)));
+
+  const deduped: RawJob[] = [];
+  const seenId = new Set<string>();
+  for (const j of jobs) {
+    if (seenId.has(j.external_id)) continue;
+    seenId.add(j.external_id);
+    deduped.push(j);
+  }
+  return { jobs: deduped, queries, errors };
 }
 
 /** Firecrawl scrape of one URL, returned as markdown. */
@@ -197,21 +308,32 @@ export async function searchIndeed(opts: {
   for (const t of targets) {
     try {
       const md = await paced(() => scrape(t.url));
-      // Titles render as markdown links to /rc/clk?jk=… or /viewjob?jk=…
-      for (const m of md.matchAll(/\[([^\]]{4,120})\]\((https?:\/\/[^)]*?[?&]jk=([a-z0-9]+)[^)]*)\)/gi)) {
-        const [, rawTitle, url, jk] = m;
+      // Titles render as markdown links to /rc/clk?jk=… or /viewjob?jk=…, with
+      // the employer and its city on the two <br>-separated lines that follow.
+      // Reading those is why rows no longer land as "See posting".
+      for (const m of md.matchAll(
+        /\[([^\]]{4,120})\]\((https?:\/\/[^)]*?[?&]jk=([a-z0-9]+)[^)]*)\)((?:<br>[^<|\n]{0,120}){0,2})/gi
+      )) {
+        const [, rawTitle, url, jk, tail] = m;
         const title = rawTitle.replace(/\s+/g, " ").trim();
         // Skip Indeed's own nav/search chrome, which also links with jk params.
         if (/salaries|company reviews|sign in|post your resume/i.test(title)) continue;
         if (seen.has(jk)) continue;
         seen.add(jk);
+
+        const [company, where] = (tail ?? "")
+          .split("<br>")
+          .map((s) => s.trim())
+          .filter(Boolean);
+
         jobs.push({
           source: "indeed",
           external_id: `indeed-${jk}`,
           title,
-          company: "See posting",
-          location: t.place,
-          remote: /remote/i.test(`${title} ${t.place}`),
+          company: company || "See posting",
+          // Fall back to the searched place only when the card omits a city.
+          location: where || t.place,
+          remote: /remote|work from home/i.test(`${title} ${where ?? ""} ${t.place}`),
           salary: null,
           url,
           // Indeed hosts many different employer forms; never auto-submit.

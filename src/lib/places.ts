@@ -15,9 +15,11 @@ type Place = {
 function placesError(status: number, body: string): Error {
   if (status === 403)
     return new Error(
-      "Places API denied the request (403). Check the key's API restrictions " +
-        "include “Places API (New)” — not the legacy “Places API” — that the API " +
-        "is enabled, and that billing is active on the project."
+      "Places API denied the request (403). Most often billing is not enabled on " +
+        "the Google Cloud project — Places has no free tier and every call is " +
+        "rejected until a billing account is linked. Failing that, check that " +
+        "“Places API (New)” is enabled and included in the key's API restrictions " +
+        "(the legacy “Places API” is a different product and does not cover this)."
     );
   if (status === 429)
     return new Error("Places API quota exceeded (429). Try again later or raise the quota.");

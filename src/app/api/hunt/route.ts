@@ -11,7 +11,10 @@ import {
 } from "@/lib/boards";
 import { scoreJob } from "@/lib/claude";
 
-export const maxDuration = 300;
+// A full hunt now reads pages with the model as well as fetching them, and
+// Firecrawl calls are paced against a per-minute cap — a measured run takes
+// ~5min, so the declared ceiling has to clear it.
+export const maxDuration = 600;
 
 type Scorable = {
   id: number;
@@ -73,6 +76,13 @@ export async function POST(req: NextRequest) {
         roles: prefs.roles ?? [],
         yearsExperience: resume.years_experience,
         linkedInOpts: {
+          roles: prefs.roles?.length ? prefs.roles : prefs.keywords,
+          locations: prefs.locations ?? [],
+          remoteOnly: Boolean(prefs.remoteOnly),
+        },
+        // Same shape, but for sources that take a free-text query rather than a
+        // board slug (currently amazon.jobs).
+        searchOpts: {
           roles: prefs.roles?.length ? prefs.roles : prefs.keywords,
           locations: prefs.locations ?? [],
           remoteOnly: Boolean(prefs.remoteOnly),

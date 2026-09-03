@@ -77,6 +77,68 @@ ${(job.description ?? "").slice(0, 4000)}`,
   return res.parsed_output as Score;
 }
 
+// Firecrawl returns whole pages, and most job pages on the open web are not on
+// an ATS whose URL encodes the company. Rather than discard them (the old
+// behaviour dropped 100% of real results — Amazon, Apple, Naukri, LinkedIn and
+// every company careers site), read the page and pull the postings out of it.
+// One page is one cheap model call, so this runs on the scoring model.
+const ExtractedJobsSchema = z.object({
+  jobs: z
+    .array(
+      z.object({
+        title: z.string().describe("Exact job title as written on the page"),
+        company: z
+          .string()
+          .describe("Employer doing the hiring — never the job board or aggregator name"),
+        location: z
+          .string()
+          .describe("City/state/country as written, or 'Remote'. Empty string if unstated."),
+        remote: z.boolean().describe("True only if the posting says remote/work-from-home"),
+        salary: z.string().describe("Compensation as written, e.g. '₹8-12 LPA'. Empty if unstated."),
+        url: z
+          .string()
+          .describe(
+            "Absolute URL of this specific posting, copied verbatim from the page. " +
+              "Empty string when the page itself is the posting."
+          ),
+        summary: z.string().describe("Up to 400 characters of the role's requirements/duties"),
+      })
+    )
+    .describe("Every distinct job posting on this page; empty array if it has none"),
+});
+
+export type ExtractedJob = z.infer<typeof ExtractedJobsSchema>["jobs"][number];
+
+export async function extractJobsFromPage(
+  pageUrl: string,
+  markdown: string
+): Promise<ExtractedJob[]> {
+  const res = await client.messages.parse({
+    model: SCORE_MODEL,
+    max_tokens: 8192,
+    output_config: { format: zodOutputFormat(ExtractedJobsSchema) },
+    system:
+      "You extract job postings from a scraped web page. " +
+      "A page is either ONE posting (return a single entry with an empty url) or a " +
+      "search/listing page (return one entry per posting, each with its own url copied " +
+      "exactly from the page). " +
+      "Return an empty array for pages that advertise no specific role: category and " +
+      "landing pages, office/location marketing pages, blog posts, login walls, and " +
+      "'similar jobs'/'people also viewed' sidebars. " +
+      "Never invent a URL, a company, or a salary — leave the field empty instead.",
+    messages: [
+      {
+        role: "user",
+        content: `Page URL: ${pageUrl}
+
+---
+${markdown.slice(0, 14000)}`,
+      },
+    ],
+  });
+  return (res.parsed_output as { jobs: ExtractedJob[] } | null)?.jobs ?? [];
+}
+
 export async function draftCoverLetter(
   resume: Resume,
   job: { title: string; company: string; description: string | null }

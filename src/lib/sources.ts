@@ -349,7 +349,90 @@ function relevant(
 
   const ENGINEERING =
     /\b(engineer|developer|programmer|software|frontend|front-end|backend|back-end|full.?stack|web dev|sde)\b/;
-  return ENGINEERING.test(title) && terms.some((t) => hay.includes(t.toLowerCase()));
+  if (!ENGINEERING.test(title)) return false;
+
+  // Board dumps hand back every open role at a company, so they still have to
+  // earn their place with a keyword. Sources that already searched by role
+  // server-side do not: demanding our own phrasing reappear in the title threw
+  // away Amazon's entire India board, where the roles are all titled "Software
+  // Development Engineer" and the stack only shows up in the body.
+  const SEARCHED = new Set(["amazon", "indeed", "linkedin", "web"]);
+  return SEARCHED.has(job.source) || terms.some((t) => hay.includes(t.toLowerCase()));
+}
+
+/**
+ * Amazon runs no ATS we can query and blocks scrapers, but amazon.jobs backs its
+ * own search box with a public JSON endpoint. It is the one FAANG board
+ * reachable without Firecrawl, and it is India-heavy: 273 open roles under
+ * normalized_country_code[]=IND at the time of writing.
+ */
+export async function fetchAmazonJobs(opts: {
+  roles: string[];
+  locations: string[];
+  remoteOnly: boolean;
+}): Promise<RawJob[]> {
+  const INDIA =
+    /india|bengaluru|bangalore|mumbai|delhi|hyderabad|pune|chennai|gurgaon|noida|jaipur|kolkata|ahmedabad/i;
+
+  // loc_query is ignored by the endpoint; only the country facet actually
+  // filters. An empty facet means "anywhere", which is what "Remote" wants.
+  const countries = opts.remoteOnly
+    ? [""]
+    : [
+        ...new Set(
+          opts.locations.map((l) =>
+            INDIA.test(l) ? "IND" : /remote|anywhere/i.test(l) ? "" : "USA"
+          )
+        ),
+      ];
+
+  // base_query matches the posting body, not the title, and Amazon titles
+  // everything "Software Development Engineer" — searching for the user's own
+  // role names alone returns nothing ("Full Stack Developer" → 0 hits), so
+  // Amazon's own vocabulary is appended as a floor.
+  const roles = [...opts.roles.slice(0, 2), "software development engineer"];
+
+  const jobs: RawJob[] = [];
+  const seen = new Set<string>();
+
+  for (const role of roles) {
+    for (const country of countries) {
+      const url =
+        "https://www.amazon.jobs/en/search.json" +
+        `?base_query=${encodeURIComponent(role)}` +
+        (country ? `&normalized_country_code%5B%5D=${country}` : "") +
+        "&result_limit=100&sort=recent";
+      try {
+        const data = (await getJSON(url)) as { jobs?: Array<Record<string, unknown>> };
+        for (const j of data.jobs ?? []) {
+          const id = String(j.id_icims ?? j.id ?? "");
+          if (!id || seen.has(id)) continue;
+          seen.add(id);
+          const where = String(j.normalized_location ?? j.location ?? "");
+          jobs.push({
+            source: "amazon",
+            external_id: `amazon-${id}`,
+            title: String(j.title ?? "Open role"),
+            company: String(j.company_name ?? "Amazon"),
+            location: where || null,
+            remote: /remote|virtual/i.test(`${j.title ?? ""} ${where}`),
+            salary: null,
+            url: `https://www.amazon.jobs${j.job_path ?? `/en/jobs/${id}`}`,
+            // Amazon's flow needs an account; never auto-submit.
+            apply_url: null,
+            description: [j.description_short, j.basic_qualifications]
+              .filter(Boolean)
+              .join("\n\n")
+              .slice(0, 6000) || null,
+            posted_at: (j.posted_date as string) ?? null,
+          });
+        }
+      } catch {
+        /* one country/role miss should not fail the hunt */
+      }
+    }
+  }
+  return jobs;
 }
 
 export async function huntAll(opts: {
@@ -362,6 +445,7 @@ export async function huntAll(opts: {
   smartRecruitersCompanies?: string[];
   webJobs?: RawJob[];
   linkedInOpts?: { roles: string[]; locations: string[]; remoteOnly: boolean };
+  searchOpts?: { roles: string[]; locations: string[]; remoteOnly: boolean };
 }): Promise<{ fetched: number; inserted: number; errors: string[] }> {
   const errors: string[] = [];
   const batches = await Promise.allSettled([
@@ -377,6 +461,7 @@ export async function huntAll(opts: {
     ...(opts.smartRecruitersCompanies ?? []).map((s) => fetchSmartRecruiters(s)),
     Promise.resolve(opts.webJobs ?? []),
     opts.linkedInOpts ? fetchLinkedIn(opts.linkedInOpts) : Promise.resolve([]),
+    opts.searchOpts ? fetchAmazonJobs(opts.searchOpts) : Promise.resolve([]),
   ]);
 
   const all: RawJob[] = [];
