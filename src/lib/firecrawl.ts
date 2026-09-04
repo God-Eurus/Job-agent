@@ -269,6 +269,11 @@ async function scrape(url: string): Promise<string> {
   return data.data?.markdown ?? "";
 }
 
+const HEX = "0123456789abcdef";
+const PLACEHOLDER_JK = new Set(
+  Array.from({ length: HEX.length }, (_, i) => HEX.slice(i) + HEX.slice(0, i))
+);
+
 /**
  * Indeed has no public API and blocks plain requests, but its search pages
  * render for Firecrawl. Results are the strongest India-market source we found
@@ -318,6 +323,10 @@ export async function searchIndeed(opts: {
         const title = rawTitle.replace(/\s+/g, " ").trim();
         // Skip Indeed's own nav/search chrome, which also links with jk params.
         if (/salaries|company reviews|sign in|post your resume/i.test(title)) continue;
+        // Indeed's markup carries template links whose id is just the hex
+        // alphabet rotated ("123456789abcdef0"); they ingest as real postings
+        // pointing at a dead page.
+        if (PLACEHOLDER_JK.has(jk.toLowerCase())) continue;
         if (seen.has(jk)) continue;
         seen.add(jk);
 

@@ -5,15 +5,54 @@ import { findHiringContact } from "@/lib/contacts";
 
 export const maxDuration = 300;
 
-export async function GET() {
+// The board renders the top 500 by score, so source/remote have to be applied
+// in SQL — filtering client-side would only ever search inside that window and
+// hide, say, the Indeed rows sitting at rank 600.
+export async function GET(req: NextRequest) {
+  const params = req.nextUrl.searchParams;
+  const source = params.get("source") ?? "";
+  const place = params.get("place") ?? "any";
+
+  const where = ["score IS NOT NULL"];
+  const args: unknown[] = [];
+
+  if (source && source !== "all") {
+    where.push("source = ?");
+    args.push(source);
+  }
+  // Some adapters set the flag, others only say "Remote" in the location, so
+  // trust either. 11 rows carry remote=0 with a remote location.
+  const IS_REMOTE = "(remote = 1 OR lower(COALESCE(location, '')) LIKE '%remote%')";
+  if (place === "remote") where.push(IS_REMOTE);
+  else if (place === "onsite") where.push(`NOT ${IS_REMOTE}`);
+
   const jobs = db
     .prepare(
       `SELECT id, source, title, company, location, remote, salary, url, posted_at,
               score, score_reason, status
-       FROM jobs WHERE score IS NOT NULL ORDER BY score DESC, id DESC LIMIT 500`
+       FROM jobs WHERE ${where.join(" AND ")} ORDER BY score DESC, id DESC LIMIT 500`
     )
-    .all();
-  return NextResponse.json({ jobs });
+    .all(...args);
+
+  // Counted over the whole table, not the returned page, so the dropdown still
+  // shows a source whose jobs all fall outside the top 500.
+  const sources = db
+    .prepare(
+      `SELECT source, COUNT(*) AS n,
+              SUM(CASE WHEN ${IS_REMOTE} THEN 1 ELSE 0 END) AS remote
+       FROM jobs WHERE score IS NOT NULL GROUP BY source ORDER BY n DESC`
+    )
+    .all() as { source: string; n: number; remote: number }[];
+
+  const totals = db
+    .prepare(
+      `SELECT COUNT(*) AS scored,
+              SUM(CASE WHEN ${IS_REMOTE} THEN 1 ELSE 0 END) AS remote
+       FROM jobs WHERE score IS NOT NULL`
+    )
+    .get() as { scored: number; remote: number };
+
+  return NextResponse.json({ jobs, sources, totals });
 }
 
 type PrepResult = { jobId: number; ok: boolean; contact?: string | null; error?: string };

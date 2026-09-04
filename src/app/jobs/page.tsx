@@ -28,6 +28,14 @@ type Job = {
 
 type Filter = "matched" | "queued" | "applied" | "skipped" | "all";
 type Sort = "score" | "newest" | "company";
+type Place = "any" | "remote" | "onsite";
+type SourceCount = { source: string; n: number; remote: number };
+
+const PLACES: { key: Place; label: string }[] = [
+  { key: "any", label: "Anywhere" },
+  { key: "remote", label: "Remote" },
+  { key: "onsite", label: "On-site" },
+];
 
 const FILTERS: { key: Filter; label: string }[] = [
   { key: "matched", label: "Matched" },
@@ -44,6 +52,11 @@ export default function Jobs() {
   const [busy, setBusy] = useState(false);
   const [filter, setFilter] = useState<Filter>("matched");
   const [sort, setSort] = useState<Sort>("score");
+  // Source and place filter in SQL, not here — the board only holds the top 500.
+  const [source, setSource] = useState("all");
+  const [place, setPlace] = useState<Place>("any");
+  const [sources, setSources] = useState<SourceCount[]>([]);
+  const [totals, setTotals] = useState({ scored: 0, remote: 0 });
   const [q, setQ] = useState("");
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [cursor, setCursor] = useState(0);
@@ -58,16 +71,20 @@ export default function Jobs() {
       .catch(() => {});
   }, []);
 
-  const load = useCallback(
-    () =>
-      fetch("/api/jobs")
-        .then((r) => r.json())
-        .then((d) => setJobs(d.jobs ?? []))
-        .catch(() => setJobs([])),
-    []
-  );
+  const load = useCallback(() => {
+    const qs = new URLSearchParams({ source, place });
+    return fetch(`/api/jobs?${qs}`)
+      .then((r) => r.json())
+      .then((d) => {
+        setJobs(d.jobs ?? []);
+        if (d.sources) setSources(d.sources);
+        if (d.totals) setTotals(d.totals);
+      })
+      .catch(() => setJobs([]));
+  }, [source, place]);
 
   useEffect(() => {
+    setJobs(null);
     load();
   }, [load]);
 
@@ -208,8 +225,15 @@ export default function Jobs() {
     return () => window.removeEventListener("keydown", onKey);
   }, [visible, cursor, openId, act]);
 
-  useEffect(() => setCursor(0), [filter, q, sort]);
+  useEffect(() => setCursor(0), [filter, q, sort, source, place]);
 
+  const narrowed = source !== "all" || place !== "any";
+  // Scoped to the chosen source, otherwise the chip advertises 824 remote jobs
+  // while a source holding 40 of them is selected.
+  const remoteCount =
+    source === "all"
+      ? totals.remote
+      : (sources.find((s) => s.source === source)?.remote ?? 0);
   const allSelected = visible.length > 0 && visible.every((j) => selected.has(j.id));
   const selectedMatched = visible.filter((j) => selected.has(j.id) && j.status === "matched");
 
@@ -219,7 +243,7 @@ export default function Jobs() {
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Jobs</h1>
           <p className="mt-1 text-[13px] text-ink-muted">
-            {counts.all} scored · <kbd className="mono text-ink">j</kbd>/
+            {counts.all === totals.scored ? counts.all : `${counts.all} of ${totals.scored}`} scored · <kbd className="mono text-ink">j</kbd>/
             <kbd className="mono text-ink">k</kbd> move ·{" "}
             <kbd className="mono text-ink">x</kbd> select · <kbd className="mono text-ink">p</kbd>{" "}
             prep · <kbd className="mono text-ink">/</kbd> search
@@ -283,6 +307,41 @@ export default function Jobs() {
         </select>
       </div>
 
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="label shrink-0">Source</span>
+        <button onClick={() => setSource("all")} data-active={source === "all"} className="chip">
+          All
+          <span className="mono opacity-60">{totals.scored}</span>
+        </button>
+        {sources.map((s) => (
+          <button
+            key={s.source}
+            onClick={() => setSource(s.source)}
+            data-active={source === s.source}
+            className="chip"
+            title={`${s.remote} of ${s.n} are remote`}
+          >
+            {s.source}
+            <span className="mono opacity-60">{s.n}</span>
+          </button>
+        ))}
+
+        <div className="ml-auto flex items-center gap-2">
+          <span className="label shrink-0">Location</span>
+          {PLACES.map((p) => (
+            <button
+              key={p.key}
+              onClick={() => setPlace(p.key)}
+              data-active={place === p.key}
+              className="chip"
+            >
+              {p.label}
+              {p.key === "remote" && <span className="mono opacity-60">{remoteCount}</span>}
+            </button>
+          ))}
+        </div>
+      </div>
+
       {selected.size > 0 && (
         <div className="flex flex-wrap items-center gap-3 border border-line-strong bg-surface px-4 py-2.5">
           <span className="mono text-[13px]">{selected.size} selected</span>
@@ -317,16 +376,36 @@ export default function Jobs() {
         ) : visible.length === 0 ? (
           <EmptyState
             icon={IconBriefcase}
-            title={q ? "Nothing matches that search" : `No ${filter === "all" ? "" : filter} jobs`}
+            title={
+              q
+                ? "Nothing matches that search"
+                : narrowed
+                  ? `No ${filter === "all" ? "" : filter} jobs in this slice`
+                  : `No ${filter === "all" ? "" : filter} jobs`
+            }
             hint={
               q
                 ? "Try a looser term, or switch to the All tab."
-                : filter === "matched"
-                  ? "Run a hunt to pull the latest postings and score them against your profile."
-                  : "Prep or skip matched jobs and they'll land here."
+                : narrowed
+                  ? `Nothing from ${source === "all" ? "any source" : source}${
+                      place === "any" ? "" : ` that is ${place === "remote" ? "remote" : "on-site"}`
+                    } under this tab.`
+                  : filter === "matched"
+                    ? "Run a hunt to pull the latest postings and score them against your profile."
+                    : "Prep or skip matched jobs and they'll land here."
             }
             action={
-              !q && filter === "matched" ? (
+              narrowed && !q ? (
+                <button
+                  onClick={() => {
+                    setSource("all");
+                    setPlace("any");
+                  }}
+                  className="btn-ghost"
+                >
+                  Clear filters
+                </button>
+              ) : !q && filter === "matched" ? (
                 <button onClick={() => hunt()} disabled={hunting} className="btn-primary">
                   <IconRefresh className={`h-3.5 w-3.5 ${hunting ? "animate-spin" : ""}`} />
                   Hunt latest
